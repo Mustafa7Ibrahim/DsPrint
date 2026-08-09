@@ -1,0 +1,33 @@
+name: ds_print
+description: Reusable invoice preview and thermal-printing plugin (Star Micronics StarXpand).
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dartz: ^0.10.1
+  equatable: ^2.0.5
+  flutter_bloc: ^8.1.6
+  get_it: ^7.2.0
+  shared_preferences: ^2.5.3
+  webview_flutter: ^4.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  bloc_test: ^9.1.7
+  mocktail: ^1.0.4
+
+flutter:
+  assets:
+    - assets/icons/
+  plugin:
+    platforms:
+      android:
+        package: com.dsprint.ds_print
+        pluginClass: DsPrintPlugin
