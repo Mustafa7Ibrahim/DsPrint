@@ -19,7 +19,7 @@ class InvoicePreviewScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (_) => dsPrintSl<InvoicePreviewCubit>(),
+      create: (_) => dsPrintResolve<InvoicePreviewCubit>(),
       child: _InvoicePreviewView(url: url, title: title),
     );
   }

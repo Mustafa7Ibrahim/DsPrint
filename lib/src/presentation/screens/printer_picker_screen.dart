@@ -27,8 +27,8 @@ class PrinterPickerScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (_) => dsPrintSl<PrinterDiscoveryCubit>()),
-        BlocProvider(create: (_) => dsPrintSl<PrintJobCubit>()),
+        BlocProvider(create: (_) => dsPrintResolve<PrinterDiscoveryCubit>()),
+        BlocProvider(create: (_) => dsPrintResolve<PrintJobCubit>()),
       ],
       child: _PrinterPickerView(payload: payload),
     );

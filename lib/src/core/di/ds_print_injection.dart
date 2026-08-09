@@ -31,8 +31,6 @@ import '../../presentation/renderer/overlay_invoice_renderer.dart';
 /// registered there.
 final GetIt dsPrintSl = GetIt.asNewInstance();
 
-bool _isDsPrintInitialised = false;
-
 // Native channel names — must match `DsPrintPlugin.kt` exactly; a mismatch
 // here is a silent runtime no-op on the Android side, not a build error.
 const _discoveryEventChannelName = 'com.printer.discover/event';
@@ -40,10 +38,16 @@ const _printMethodChannelName = 'com.printer.html/sendToNative';
 const _printResultEventChannelName = 'com.printer.html/listenFromNative';
 
 /// Registers every ds_print dependency: datasources → repositories → use
-/// cases → cubits. Safe to call more than once — the facade calls this
-/// lazily before every public entry point, so the host never has to.
+/// cases → cubits. Safe to call more than once — every entry point calls
+/// this lazily, so the host never has to.
+///
+/// Guarded by container state, not a bool flag: a bool can desync from
+/// [dsPrintSl] (e.g. `dsPrintSl.reset()` empties the container but would
+/// leave a flag `true`), silently skipping re-registration. [AutoPrintUseCase]
+/// is registered near the end of the sequence below, so its presence is a
+/// reliable sentinel for "fully registered".
 void dsPrintInjection() {
-  if (_isDsPrintInitialised) return;
+  if (dsPrintSl.isRegistered<AutoPrintUseCase>()) return;
 
   // datasources
   dsPrintSl.registerLazySingleton<PrinterDiscoveryDataSource>(
@@ -118,8 +122,18 @@ void dsPrintInjection() {
       selectPrinter: dsPrintSl<SelectPrinterUseCase>(),
     ),
   );
-
-  _isDsPrintInitialised = true;
 }
 
-bool get isDsPrintInitialised => _isDsPrintInitialised;
+bool get isDsPrintInitialised => dsPrintSl.isRegistered<AutoPrintUseCase>();
+
+/// Resolves a ds_print dependency, initialising the container first.
+///
+/// Every entry point must go through here rather than touching [dsPrintSl]
+/// directly. The exported screens are entry points too — a host app's
+/// router can build `InvoicePreviewScreen` without ever calling a
+/// `DsPrint.*` method, and resolving straight from [dsPrintSl] in that case
+/// threw "InvoicePreviewCubit is not registered".
+T dsPrintResolve<T extends Object>() {
+  dsPrintInjection();
+  return dsPrintSl<T>();
+}

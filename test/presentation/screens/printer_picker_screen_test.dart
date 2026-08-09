@@ -7,6 +7,7 @@
 // against DsWebController/DsImageBoundary fakes. A widget-level smoke test
 // of those two screens would mostly be re-testing webview_flutter itself.
 import 'package:dartz/dartz.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -74,11 +75,16 @@ void main() {
     mockAutoPrint = MockAutoPrintUseCase();
     mockPrintJob = MockPrintJobUseCase();
 
-    // The screen resolves its cubits from dsPrintSl via GetIt; registering
-    // real cubits backed by mocktail-mocked use cases here exercises the
-    // actual PrinterDiscoveryCubit/PrintJobCubit logic, not a hand-rolled
-    // stand-in.
+    // The screen resolves its cubits through dsPrintResolve, which calls
+    // dsPrintInjection() first; registering real cubits backed by
+    // mocktail-mocked use cases here exercises the actual
+    // PrinterDiscoveryCubit/PrintJobCubit logic, not a hand-rolled
+    // stand-in. Also register AutoPrintUseCase — dsPrintInjection()'s
+    // sentinel check — so it short-circuits instead of trying (and failing,
+    // since GetIt disallows re-registration) to register real cubits over
+    // these mocked ones.
     dsPrintSl.reset();
+    dsPrintSl.registerFactory<AutoPrintUseCase>(() => mockAutoPrint);
     dsPrintSl.registerFactory<PrinterDiscoveryCubit>(
       () => PrinterDiscoveryCubit(
         discoverPrinters: mockDiscoverPrinters,
@@ -160,4 +166,31 @@ void main() {
     expect(find.byType(DsPrintMessageDialog), findsOneWidget);
     expect(find.byType(SnackBar), findsNothing);
   });
+
+  testWidgets(
+    'builds on a completely empty container — no manual registration '
+    '(regression for "InvoicePreviewCubit is not registered inside GetIt", '
+    'reproduced via PrinterPickerScreen since InvoicePreviewScreen builds a '
+    'WebViewController and needs a WebViewPlatform implementation this '
+    'package has no in-memory fake for)',
+    (tester) async {
+      // Undo the mocked registrations `setUp` just made above, so this test
+      // exercises the real dsPrintInjection() path the way a host app's
+      // router hitting this screen directly would.
+      await dsPrintSl.reset();
+
+      // Forces the real PrinterDiscoveryDataSource down its "off Android"
+      // early-return path (an immediate Stream.error, no MethodChannel /
+      // EventChannel round-trip) instead of hanging on a native discovery
+      // channel that has no handler registered in a widget test — this test
+      // is only about the DI wiring, not a platform-channel integration test.
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+      await tester.pumpWidget(const MaterialApp(home: PrinterPickerScreen()));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

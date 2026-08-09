@@ -14,9 +14,11 @@ import 'presentation/screens/invoice_preview_screen.dart';
 import 'presentation/screens/printer_picker_screen.dart';
 
 /// Public entry point for ds_print. Zero configuration required: every
-/// method below calls [dsPrintInjection] first (idempotent), so a host app
-/// only needs a path dependency on this package and a call to one of these
-/// static methods — no setup call, no injected theme/strings/storage.
+/// method below either resolves through [dsPrintResolve] itself or pushes a
+/// screen that does (both initialise the DI container lazily, idempotently),
+/// so a host app only needs a path dependency on this package and a call to
+/// one of these static methods — no setup call, no injected
+/// theme/strings/storage.
 class DsPrint {
   const DsPrint._();
 
@@ -31,7 +33,6 @@ class DsPrint {
   /// top of the nearest resolvable navigator.
   static Future<void> url(String url,
       {BuildContext? context, String? title}) async {
-    dsPrintInjection();
     final resolvedContext = RootContextResolver.resolve(explicit: context);
     if (resolvedContext == null) {
       throw StateError(
@@ -55,30 +56,26 @@ class DsPrint {
   /// the cached, or else first-discovered-and-cached, device.
   static Future<Either<DsPrintFailure, Unit>> printUrlSilently(String url,
       {int copies = 1}) async {
-    dsPrintInjection();
-    final captureResult = await dsPrintSl<CaptureInvoiceUseCase>()(url);
+    final captureResult = await dsPrintResolve<CaptureInvoiceUseCase>()(url);
     return captureResult.fold(
       (failure) async => Left(failure),
-      (payload) => dsPrintSl<AutoPrintUseCase>()(payload, copies: copies),
+      (payload) => dsPrintResolve<AutoPrintUseCase>()(payload, copies: copies),
     );
   }
 
   static Future<Either<DsPrintFailure, Unit>> printBase64(String base64,
       {int copies = 1}) {
-    dsPrintInjection();
-    return dsPrintSl<AutoPrintUseCase>()(ImageBase64Payload(base64),
+    return dsPrintResolve<AutoPrintUseCase>()(ImageBase64Payload(base64),
         copies: copies);
   }
 
   static Future<Either<DsPrintFailure, Unit>> printHtml(String html) {
-    dsPrintInjection();
-    return dsPrintSl<AutoPrintUseCase>()(HtmlPayload(html));
+    return dsPrintResolve<AutoPrintUseCase>()(HtmlPayload(html));
   }
 
   /// Pushes the device picker with no payload attached — pick/pair a
   /// printer without printing anything.
   static Future<void> selectDevice({BuildContext? context}) async {
-    dsPrintInjection();
     final resolvedContext = RootContextResolver.resolve(explicit: context);
     if (resolvedContext == null) {
       throw StateError(
@@ -93,7 +90,6 @@ class DsPrint {
   }
 
   static Future<Either<DsPrintFailure, List<PrinterDevice>>> discover() {
-    dsPrintInjection();
-    return dsPrintSl<DiscoverPrintersUseCase>()();
+    return dsPrintResolve<DiscoverPrintersUseCase>()();
   }
 }

@@ -41,6 +41,7 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
   final GlobalKey _boundaryKey = GlobalKey();
   final ValueNotifier<double?> _captureHeight = ValueNotifier<double?>(null);
   bool _hasAutoCaptured = false;
+  bool _hasRequestedUrl = false;
 
   @override
   void initState() {
@@ -62,12 +63,26 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
             );
           },
         ),
-      )
-      ..loadRequest(
-        Uri.parse(widget.url),
-        headers: {'Accept-Language': DsPrintStrings.of(context).languageCode},
       );
     widget.onReady?.call(DsPrintWebSurfaceHandle._(this));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The Accept-Language header reads `Localizations`, an InheritedWidget.
+    // Resolving it in initState throws
+    // `dependOnInheritedWidgetOfExactType<_LocalizationsScope>() ... was
+    // called before initState() completed`, so the load is deferred to here —
+    // the earliest point an inherited lookup is legal. Guarded so a later
+    // dependency change (locale switch, theme change) never reloads the page
+    // mid-capture.
+    if (_hasRequestedUrl) return;
+    _hasRequestedUrl = true;
+    _controller.loadRequest(
+      Uri.parse(widget.url),
+      headers: {'Accept-Language': DsPrintStrings.of(context).languageCode},
+    );
   }
 
   void _handlePageFinished() {
