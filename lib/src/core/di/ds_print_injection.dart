@@ -25,6 +25,7 @@ import '../../presentation/cubit/invoice_preview_cubit.dart';
 import '../../presentation/cubit/print_job_cubit.dart';
 import '../../presentation/cubit/printer_discovery_cubit.dart';
 import '../../presentation/renderer/overlay_invoice_renderer.dart';
+import '../config/ds_print_config.dart';
 
 /// Private to ds_print — deliberately not the host app's global `sl`, so this
 /// package's registrations never collide with the ~1200 lines already
@@ -58,6 +59,11 @@ void dsPrintInjection() {
     () => PrinterNativeDataSourceImpl(
       methodChannel: const MethodChannel(_printMethodChannelName),
       eventChannel: const EventChannel(_printResultEventChannelName),
+      // Read inside the factory, not at registration time, so a
+      // `DsPrint.configure()` made any time before the first print still
+      // applies. Null keeps the datasource's own 20s default.
+      resultTimeout: DsPrintConfig.current?.printResultTimeout ??
+          const Duration(seconds: 20),
     ),
   );
   dsPrintSl.registerLazySingleton<SelectedPrinterDataSource>(

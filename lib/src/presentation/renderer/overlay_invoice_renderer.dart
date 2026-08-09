@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/context/root_context_resolver.dart';
 import '../../core/error/ds_print_exception.dart';
 import '../../domain/ports/invoice_render_port.dart';
+import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_web_surface.dart';
 
 /// The headless path behind `DsPrint.printUrlSilently` — loads [url] into an
@@ -31,8 +32,7 @@ class OverlayInvoiceRenderer implements InvoiceRenderPort {
           // The WebView must actually be painted at least once for its
           // RepaintBoundary to produce an image, so it is deliberately
           // mounted on-screen (not positioned off the viewport) and hidden
-          // by opaquely covering it instead — matching the host app's
-          // `body_portrait.dart` overlay pattern.
+          // by opaquely covering it instead — see [DsPrintCaptureCover].
           Positioned.fill(
             child: DsPrintWebSurface(
               url: url,
@@ -45,7 +45,7 @@ class OverlayInvoiceRenderer implements InvoiceRenderPort {
               },
             ),
           ),
-          const Positioned.fill(child: ColoredBox(color: Colors.white)),
+          const Positioned.fill(child: DsPrintCaptureCover()),
         ],
       ),
     );

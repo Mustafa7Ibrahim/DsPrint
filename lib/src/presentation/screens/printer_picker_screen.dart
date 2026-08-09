@@ -10,6 +10,8 @@ import '../cubit/print_job_cubit.dart';
 import '../cubit/print_job_state.dart';
 import '../cubit/printer_discovery_cubit.dart';
 import '../cubit/printer_discovery_state.dart';
+import '../widgets/ds_print_app_bar.dart';
+import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_message_dialog.dart';
 import '../widgets/printer_device_tile.dart';
 
@@ -74,14 +76,13 @@ class _PrinterPickerViewState extends State<_PrinterPickerView> {
         }
       },
       child: Scaffold(
-        appBar: AppBar(title: Text(strings.printers), centerTitle: true),
+        backgroundColor: DsPrintTheme.of(context).background,
+        appBar: DsPrintAppBar(title: strings.printers),
         body: BlocBuilder<PrinterDiscoveryCubit, PrinterDiscoveryState>(
           builder: (context, state) => switch (state) {
             PrinterDiscoveryInitial() ||
             PrinterDiscoveryLoading() =>
-              const Center(
-                child: CircularProgressIndicator(),
-              ),
+              const DsPrintLoadingIndicator(),
             PrinterDiscoverySuccess(devices: final devices)
                 when devices.isEmpty =>
               const Center(
@@ -133,7 +134,17 @@ class AddPrinterButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = DsPrintTheme.of(context);
     return ElevatedButton(
+      // Styled from the resolved theme rather than left to the host's
+      // `elevatedButtonTheme`, so the pill matches the flavor colour in any
+      // host — including one that never registered a button theme.
+      style: ElevatedButton.styleFrom(
+        backgroundColor: theme.primary,
+        foregroundColor: theme.appBarForeground,
+        minimumSize: const Size(220, 48),
+        shape: const StadiumBorder(),
+      ),
       onPressed: () => _handlePressed(context),
       child: Text(DsPrintStrings.of(context).addPrinter),
     );

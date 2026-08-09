@@ -13,10 +13,11 @@ class InvoiceCaptureRepositoryImpl implements InvoiceCaptureRepository {
 
   @override
   Future<Either<DsPrintFailure, ImageBase64Payload>> captureUrl(
-    String url,
-  ) async {
+    String url, {
+    InvoiceRenderPort? renderer,
+  }) async {
     try {
-      final base64 = await _renderer.renderUrlToBase64Png(url);
+      final base64 = await (renderer ?? _renderer).renderUrlToBase64Png(url);
       return Right(ImageBase64Payload(base64));
     } on CaptureException catch (e) {
       return Left(CaptureFailure(e.details));
