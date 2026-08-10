@@ -13,6 +13,7 @@ import 'package:ds_print/src/domain/usecases/clear_selected_printer_usecase.dart
 import 'package:ds_print/src/domain/usecases/discover_printers_usecase.dart';
 import 'package:ds_print/src/domain/usecases/get_selected_printer_usecase.dart';
 import 'package:ds_print/src/domain/usecases/print_job_usecase.dart';
+import 'package:ds_print/src/domain/usecases/resolve_print_device_usecase.dart';
 import 'package:ds_print/src/domain/usecases/select_printer_usecase.dart';
 
 class MockGetSelectedPrinterUseCase extends Mock
@@ -62,11 +63,17 @@ void main() {
     mockClearSelectedPrinter = MockClearSelectedPrinterUseCase();
     mockDiscoverPrinters = MockDiscoverPrintersUseCase();
     mockPrintJob = MockPrintJobUseCase();
+    // The resolver is real, not mocked, so every device-resolution
+    // expectation below still runs against the same three mocks it always
+    // did — the extraction into ResolvePrintDeviceUseCase moved that logic
+    // without changing it.
     useCase = AutoPrintUseCase(
-      getSelectedPrinter: mockGetSelectedPrinter,
-      selectPrinter: mockSelectPrinter,
+      resolveDevice: ResolvePrintDeviceUseCase(
+        getSelectedPrinter: mockGetSelectedPrinter,
+        selectPrinter: mockSelectPrinter,
+        discoverPrinters: mockDiscoverPrinters,
+      ),
       clearSelectedPrinter: mockClearSelectedPrinter,
-      discoverPrinters: mockDiscoverPrinters,
       printJob: mockPrintJob,
     );
   });

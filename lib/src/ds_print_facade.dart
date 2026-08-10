@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:dartz/dartz.dart';
 import 'package:flutter/material.dart';
 
@@ -10,6 +12,7 @@ import 'domain/entities/printer_device.dart';
 import 'domain/usecases/auto_print_usecase.dart';
 import 'domain/usecases/capture_invoice_usecase.dart';
 import 'domain/usecases/discover_printers_usecase.dart';
+import 'domain/usecases/resolve_print_device_usecase.dart';
 import 'presentation/screens/invoice_preview_screen.dart';
 import 'presentation/screens/printer_picker_screen.dart';
 
@@ -33,6 +36,7 @@ class DsPrint {
   /// top of the nearest resolvable navigator.
   static Future<void> url(String url,
       {BuildContext? context, String? title}) async {
+    log('DsPrint.url: url=$url');
     final resolvedContext = RootContextResolver.resolve(explicit: context);
     if (resolvedContext == null) {
       throw StateError(
@@ -54,12 +58,37 @@ class DsPrint {
 
   /// Captures [url] headlessly (no visible screen) and prints it straight to
   /// the cached, or else first-discovered-and-cached, device.
-  static Future<Either<DsPrintFailure, Unit>> printUrlSilently(String url,
-      {int copies = 1}) async {
-    final captureResult = await dsPrintResolve<CaptureInvoiceUseCase>()(url);
-    return captureResult.fold(
+  ///
+  /// Returns `Left(NoDeviceFoundFailure)` and does nothing at all when there
+  /// is no printer — no render, no overlay, no scrim. Callers that print
+  /// automatically (order creation) can therefore fire this unconditionally:
+  /// a store without a printer simply gets nothing, silently.
+  static Future<Either<DsPrintFailure, Unit>> printUrlSilently(
+    String url, {
+    int copies = 1,
+  }) async {
+    // Logged before anything else runs, so the incoming link is on record even
+    // when the call returns early because no printer was found — otherwise a
+    // silent no-op is indistinguishable from a bad url.
+    log('DsPrint.printUrlSilently: url=$url copies=$copies');
+    // Find the printer *first*. Rendering an invoice takes a WebView, a
+    // couple of seconds and a blocking scrim, and discovery costs up to ten
+    // seconds more — so the original capture-then-look-for-a-device order
+    // made a store with no printer freeze for both, then print nothing.
+    // Resolution is silent and persists what it finds, so the resolve inside
+    // AutoPrintUseCase below is a cached read rather than a second scan.
+    final deviceResult = await dsPrintResolve<ResolvePrintDeviceUseCase>()();
+    return deviceResult.fold(
       (failure) async => Left(failure),
-      (payload) => dsPrintResolve<AutoPrintUseCase>()(payload, copies: copies),
+      (_) async {
+        final captureResult =
+            await dsPrintResolve<CaptureInvoiceUseCase>()(url);
+        return captureResult.fold(
+          (failure) async => Left(failure),
+          (payload) =>
+              dsPrintResolve<AutoPrintUseCase>()(payload, copies: copies),
+        );
+      },
     );
   }
 

@@ -15,14 +15,19 @@ class InvoicePreviewCubit extends Cubit<InvoicePreviewState> {
   void onPageFinished() => emit(const InvoicePreviewReady());
 
   /// Replaces the legacy `if (_isLoading.value || _isCapturing.value) return;`
-  /// guard: only a fully-loaded, idle preview can start a capture.
+  /// guard, which this mirrors via [InvoicePreviewState.isBusy]: a capture is
+  /// rejected only while one is already running or the page is still loading.
+  ///
+  /// Printing the same invoice a second time is a normal thing to do — the
+  /// user comes back from the printer picker and taps Print again — so the
+  /// terminal states must stay re-entrant.
   ///
   /// [renderer] lets the screen capture the webview it already has on display
   /// instead of the injected headless one. It is passed rather than held as a
   /// field because it belongs to a widget that can be disposed while this cubit
   /// lives on — the cubit orchestrates, it doesn't own the surface.
   Future<void> capture(String url, {InvoiceRenderPort? renderer}) async {
-    if (state is! InvoicePreviewReady) return;
+    if (state.isBusy) return;
     emit(const InvoicePreviewCapturing());
     final result = await _captureInvoice(url, renderer: renderer);
     result.fold(

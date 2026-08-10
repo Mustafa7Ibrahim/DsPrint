@@ -6,6 +6,22 @@ import '../../domain/entities/print_payload.dart';
 sealed class InvoicePreviewState extends Equatable {
   const InvoicePreviewState();
 
+  /// The two states that must reject a new capture request — the page is
+  /// still arriving, or one capture is already in flight.
+  ///
+  /// Deliberately expressed as "busy", not "ready": [InvoicePreviewCaptured]
+  /// and [InvoicePreviewFailure] are terminal, so a `state is Ready` test
+  /// would leave the Print action dead for the rest of the screen's life once
+  /// the first print finished. Listed exhaustively rather than with a `_`
+  /// wildcard so a new state can't silently default to "not busy".
+  bool get isBusy => switch (this) {
+        InvoicePreviewLoading() || InvoicePreviewCapturing() => true,
+        InvoicePreviewReady() ||
+        InvoicePreviewCaptured() ||
+        InvoicePreviewFailure() =>
+          false,
+      };
+
   @override
   List<Object?> get props => [];
 }

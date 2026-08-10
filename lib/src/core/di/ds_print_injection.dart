@@ -20,6 +20,7 @@ import '../../domain/usecases/clear_selected_printer_usecase.dart';
 import '../../domain/usecases/discover_printers_usecase.dart';
 import '../../domain/usecases/get_selected_printer_usecase.dart';
 import '../../domain/usecases/print_job_usecase.dart';
+import '../../domain/usecases/resolve_print_device_usecase.dart';
 import '../../domain/usecases/select_printer_usecase.dart';
 import '../../presentation/cubit/invoice_preview_cubit.dart';
 import '../../presentation/cubit/print_job_cubit.dart';
@@ -104,11 +105,16 @@ void dsPrintInjection() {
   dsPrintSl.registerLazySingleton(
       () => SelectPrinterUseCase(dsPrintSl<SelectedPrinterRepository>()));
   dsPrintSl.registerLazySingleton(
-    () => AutoPrintUseCase(
+    () => ResolvePrintDeviceUseCase(
       getSelectedPrinter: dsPrintSl<GetSelectedPrinterUseCase>(),
       selectPrinter: dsPrintSl<SelectPrinterUseCase>(),
-      clearSelectedPrinter: dsPrintSl<ClearSelectedPrinterUseCase>(),
       discoverPrinters: dsPrintSl<DiscoverPrintersUseCase>(),
+    ),
+  );
+  dsPrintSl.registerLazySingleton(
+    () => AutoPrintUseCase(
+      resolveDevice: dsPrintSl<ResolvePrintDeviceUseCase>(),
+      clearSelectedPrinter: dsPrintSl<ClearSelectedPrinterUseCase>(),
       printJob: dsPrintSl<PrintJobUseCase>(),
     ),
   );

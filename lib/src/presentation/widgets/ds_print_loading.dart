@@ -30,40 +30,28 @@ class DsPrintLoadingIndicator extends StatelessWidget {
   }
 }
 
-/// Dims the invoice preview while its capture runs, matching the legacy
-/// `TaxInvoiceScreen`'s `Colors.black26` scrim. The page stays visible
-/// underneath, so the wait reads as "working on this screen" rather than
-/// "the app navigated somewhere blank".
+/// The package's one "please wait" overlay, shared by both print paths: a
+/// translucent `Colors.black26` dim — matching the legacy `TaxInvoiceScreen` —
+/// with the standard spinner on top.
+///
+/// Whatever is underneath stays visible: the invoice on the preview screen, the
+/// host's own screen during a silent print. The wait then reads as "working on
+/// this screen" rather than "the app navigated somewhere blank".
+///
+/// [AbsorbPointer] is what makes it a *blocking* wait. Without it the screen
+/// showing through would still be tappable, and on the silent path that screen
+/// is the live host UI — the user could scroll it, or start a second print,
+/// under a scrim that says the app is busy.
 class DsPrintCapturingScrim extends StatelessWidget {
   const DsPrintCapturingScrim({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const ColoredBox(
-      color: Colors.black26,
-      child: DsPrintLoadingIndicator(),
-    );
-  }
-}
-
-/// Hides the headless capture WebView used by `DsPrint.printUrlSilently`.
-///
-/// Something opaque *has* to sit on top of that WebView: it must be painted at
-/// least once for its `RepaintBoundary` to produce an image, so it can't be
-/// moved off-screen, `Offstage`d or faded out with `Opacity` (all three skip
-/// painting, and the boundary then has no layer to snapshot). What can change
-/// is how the cover looks — it used to be a bare white fill with nothing on it,
-/// which read as a frozen blank page; it now uses the host's own page
-/// background plus the normal spinner, so a silent print looks like every other
-/// loading state in the app.
-class DsPrintCaptureCover extends StatelessWidget {
-  const DsPrintCaptureCover({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: DsPrintTheme.of(context).background,
-      child: const DsPrintLoadingIndicator(),
+    return const AbsorbPointer(
+      child: ColoredBox(
+        color: Colors.black26,
+        child: DsPrintLoadingIndicator(),
+      ),
     );
   }
 }

@@ -88,9 +88,17 @@ It prints to the **paired** printer, and if none is paired yet, to the first
 device discovered — which it then pairs for next time. The pairing survives app
 restarts.
 
-A loading indicator covers the screen while the invoice renders (typically 1–3
-seconds); this is unavoidable, because a WebView must be on screen and painted
-for its contents to be capturable.
+**Safe to call unconditionally.** It looks for the printer *before* it renders
+anything, so a store with no printer attached gets `NoDeviceFoundFailure` with
+no overlay, no indicator and no invoice render — nothing the user can see. Fire
+it after every order; the stores that have a printer print, the rest no-op.
+
+"No UI" means no *navigation*: for the 1–3 seconds the render takes, the screen
+keeps showing what it was showing, dimmed by a scrim with a loading indicator.
+It is a still frame rather than the live screen — the invoice has to render in a
+real, on-screen WebView to be capturable, so that WebView is covered with a
+photograph of the screen taken the moment before. Taps are blocked for the
+duration, since the frame underneath cannot react to them.
 
 ### Screens as routes
 

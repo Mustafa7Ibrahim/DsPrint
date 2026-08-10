@@ -93,25 +93,96 @@ a spinner sit over the still-visible invoice.
 > blank white screen for several seconds. The legacy `TaxInvoiceScreen` had
 > always captured its own WebView; `SurfaceInvoiceRenderer` restores that.
 
+> **Second regression, same screen.** `capture()` used to guard with
+> `state is! InvoicePreviewReady`. `InvoicePreviewCaptured` and
+> `InvoicePreviewFailure` are terminal, so once the first print finished the
+> Print action was dead for the rest of the screen's life — and printing the
+> same invoice twice is a routine thing to do. The guard is now
+> `InvoicePreviewState.isBusy`, which rejects only `Loading` and `Capturing`,
+> mirroring the legacy `if (_isLoading.value || _isCapturing.value) return;`.
+> The lesson generalises: a *ready* test and a *busy* test are not complements
+> once a state machine has terminal states.
+
 ### Path B — silent (`DsPrint.printUrlSilently`)
 
 ```
 DsPrint.printUrlSilently(url)
+  └─ ResolvePrintDeviceUseCase → cached device, else discover-and-pair
+        └─ no printer → Left(NoDeviceFoundFailure), and nothing else runs
   └─ CaptureInvoiceUseCase → InvoiceCaptureRepository
         └─ OverlayInvoiceRenderer
-              ├─ inserts an OverlayEntry: DsPrintWebSurface + DsPrintCaptureCover
+              ├─ inserts an OverlayEntry: DsPrintWebSurface + DsPrintCapturingScrim
               ├─ autoCaptureOnLoad → capture pipeline
               └─ removes the entry in a `finally` (timeout and error paths too)
-  └─ AutoPrintUseCase → cached device, else discover-and-pair → native
+  └─ AutoPrintUseCase → resolve (now a cached read) → native
 ```
+
+**Find the printer before doing the expensive part.** The first version ran
+these in the opposite order — capture, then look for a device. Rendering costs a
+WebView, a couple of seconds and a blocking scrim; discovery costs up to ten
+seconds more. So a store with invoice printing enabled but no printer attached
+froze for both and then printed nothing, which is exactly the population that
+should have paid nothing at all. Not every store has a printer, and the callers
+that fire this (order creation) can't know which do.
+
+`ResolvePrintDeviceUseCase` exists for that question. It was `AutoPrintUseCase`'s
+private `_resolveDevice`; extracting it lets a caller ask "is there a printer?"
+without printing. `AutoPrintUseCase` still resolves for itself — that is not a
+second scan, because resolution persists whatever it discovers, so the second
+pass is a cached read.
 
 There is no screen to capture here, so one is created. The WebView **must be
 mounted on screen and painted at least once** — a `RepaintBoundary` snapshots a
 composited layer, and a subtree that never painted has no layer. That rules out
 `Offstage`, `Opacity(0)`, and positioning it off the viewport: all three skip
-painting. The only remaining option is to paint it and cover it, which is what
-`DsPrintCaptureCover` does — using the host's page background plus the standard
-spinner, so the wait reads as a loading state rather than a frozen blank page.
+painting.
+
+It also **must not be clipped down to hide it**. This was tried — a
+`SizedBox(1, 1)` → `ClipRect` → `OverflowBox` keeping the child at full layout
+size — on the theory that `toImage` rasterises the boundary's own layer and so
+cannot care about ancestor clips. On device it printed **blank paper**. An
+Android platform view with essentially no visible area stops producing content,
+and the texture the boundary composites is then empty. Being *laid out* at full
+size is not enough; it has to be genuinely on screen.
+
+So the WebView stays `Positioned.fill` and something opaque goes over it. What
+that something *shows* is free, and covering the user's screen with a blank fill
+is a strange thing for an operation named "silent" to do — so it shows a still
+photograph of the screen they were already on:
+
+```dart
+final frozenScreen = await DsPrintScreenFreeze.capture();  // before the overlay
+...
+Positioned.fill(child: DsPrintFrozenScreenCover(frame: frozenScreen)),
+```
+
+`DsPrintScreenFreeze` reads the root `RenderView`'s layer and calls
+`OffsetLayer.toImage(view.paintBounds)`. Two details are load-bearing:
+
+* **`paintBounds`, not `size`.** `RenderView.size` is logical; the root layer
+  carries the `devicePixelRatio` transform, so its coordinate space is physical.
+  `paintBounds` is `Offset.zero & (size * devicePixelRatio)` — passing `size`
+  would capture only the top-left corner on any device with a ratio above 1.
+* **`RenderObject.layer` is `@protected`**, suppressed with a targeted `ignore`.
+  It is protected against subclasses *replacing* it; reading it is the only way
+  to snapshot a screen the package doesn't own, short of requiring the host to
+  wrap its app in a `RepaintBoundary` — which would break zero-configuration.
+  Any failure returns null and the cover falls back to an opaque fill, so a
+  cosmetic nicety can never fail a print.
+
+Over that sits the same `DsPrintCapturingScrim` the preview screen uses, so the
+wait reads as a loading overlay on the user's own screen. The scrim wraps an
+`AbsorbPointer`: what shows through is a photograph, and without it the user
+would be tapping a screen that isn't reacting.
+
+The frame is disposed in a post-frame callback, not inline — `OverlayEntry`
+unmounts on the *next* frame, so the `RawImage` may still be painting it.
+
+> **Two rejected alternatives.** Inserting the entry *below* the routes looks
+> equivalent and is not: `Overlay` stops painting entries beneath the topmost
+> `opaque: true` route entry, so the WebView would never paint at all. And
+> clipping — see above; it costs you a blank print, which is worse than a
+> cosmetic problem because nothing reports it.
 
 ---
 
