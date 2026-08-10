@@ -184,11 +184,20 @@ void main() {
       // EventChannel round-trip) instead of hanging on a native discovery
       // channel that has no handler registered in a widget test — this test
       // is only about the DI wiring, not a platform-channel integration test.
+      // Cleared in `finally`, not `addTearDown`: the binding asserts every
+      // foundation debug variable is back to null when the test *body*
+      // returns, which happens before any tearDown callback runs.
       debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-
-      await tester.pumpWidget(const MaterialApp(home: PrinterPickerScreen()));
-      await tester.pumpAndSettle();
+      try {
+        await tester.pumpWidget(const MaterialApp(home: PrinterPickerScreen()));
+        // Bounded pumps, not `pumpAndSettle()`: the screen's spinner schedules
+        // frames forever, so settling never happens. Two frames is enough for
+        // the datasource's synchronous `Stream.error` to reach the cubit.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
 
       expect(tester.takeException(), isNull);
     },
