@@ -1,0 +1,41 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Flutter/Dart/Pub
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+# Libraries should not commit their lockfile.
+pubspec.lock
+
+# Android
+android/.gradle/
+android/local.properties
+android/gradlew
+android/gradlew.bat
+android/gradle/
+android/.classpath
+android/.project
+android/.settings/

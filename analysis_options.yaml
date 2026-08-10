@@ -1,0 +1,4 @@
+include: package:flutter_lints/flutter.yaml
+
+# Additional rules and analyzer configuration for ds_print.
+# See https://dart.dev/lints for the full list.

@@ -53,8 +53,8 @@ void dsPrintInjection() {
 
   // datasources
   dsPrintSl.registerLazySingleton<PrinterDiscoveryDataSource>(
-    () => PrinterDiscoveryDataSourceImpl(
-        eventChannel: const EventChannel(_discoveryEventChannelName)),
+    () => const PrinterDiscoveryDataSourceImpl(
+        eventChannel: EventChannel(_discoveryEventChannelName)),
   );
   dsPrintSl.registerLazySingleton<PrinterNativeDataSource>(
     () => PrinterNativeDataSourceImpl(

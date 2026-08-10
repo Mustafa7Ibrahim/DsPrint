@@ -13,12 +13,14 @@ button, or silently in the background.
 
 ## Install
 
-Add the path dependency:
+Add the git dependency:
 
 ```yaml
 dependencies:
   ds_print:
-    path: packages/ds_print
+    git:
+      url: https://github.com/Mustafa7Ibrahim/DsPrint.git
+      ref: v0.1.0
 ```
 
 **That is the entire integration.** There is no setup call, no `init()`, no
@@ -234,7 +236,23 @@ the widget, keep that behaviour.
 flutter test
 ```
 
-106 of 107 pass. The failing one (`printer_picker_screen_test.dart`, "builds on
-a completely empty container") is a harness issue, not a product one: the
-screen's spinner animates forever, so `pumpAndSettle` never settles in that
-test's fake-async environment. The DI path it covers is exercised on device.
+107 tests, all passing. They cover the use cases, the capture pipeline
+services, the payload chunker, the print job queue, the cubits and both
+screens' DI wiring.
+
+Note for contributors: `CircularProgressIndicator` schedules frames forever, so
+any test that ends on a loading state must use bounded `pump(Duration)` calls —
+`pumpAndSettle()` will time out rather than settle.
+
+## Developing against a host app
+
+To iterate on the package while a host app consumes it, override the git
+dependency with a local path in the **host's** `pubspec.yaml`:
+
+```yaml
+dependency_overrides:
+  ds_print:
+    path: ../DsPrint
+```
+
+Remove the override before committing.

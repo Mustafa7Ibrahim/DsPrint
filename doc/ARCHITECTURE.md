@@ -5,12 +5,11 @@ document covers *why it looks the way it does*: the layering, the two print
 paths, the capture algorithm, the native bridge, and the constraints that shaped
 each.
 
-The package was extracted from ~20 files spread across the Maqsafy host app
-(`lib/modules/shared/printer/`, `lib/core/utils/native/printer*/`,
-`tax_invoice_screen/`, `core/widgets/screenshot/`, and a 335-line
-`MainActivity.kt`). Several sections below contrast the two, because most of the
-design decisions here only make sense as answers to a specific problem in the
-original.
+The package was extracted from ~20 files spread across the host app it grew up
+in — printer modules, native printer utilities, a tax-invoice screen, screenshot
+widgets, and a 335-line `MainActivity.kt`. Several sections below contrast the
+two, because most of the design decisions here only make sense as answers to a
+specific problem in the original.
 
 ---
 
@@ -416,14 +415,15 @@ than settling. Use `pump(Duration)` in a loop for those.
 
 ---
 
-## 9. Where the host touches the package
+## 9. Where a host touches the package
 
-| Host file | Use |
+| Touchpoint | Use |
 | --- | --- |
-| `pubspec.yaml` | `ds_print: path: packages/ds_print` |
-| `lib/core/router_v2/routes/shared/shared_routes.dart` | Four routes: `tax-invoice`, `printer/add`, `printer/html`, `printer/base64` |
-| `lib/modules/shared/cart/cubit/order/order_create_cubit.dart` | `DsPrint.printUrlSilently` after an order is created |
-| `lib/modules/shared/test_screen/TestScreen.dart` | Manual smoke test |
+| `pubspec.yaml` | `ds_print:` as a git dependency on this repo |
+| Route registration | Four routes: `tax-invoice`, `printer/add`, `printer/html`, `printer/base64` |
+| Post-order-creation hook | `DsPrint.printUrlSilently` after an order is created |
+| A manual smoke-test screen | Exercises the API end-to-end during development |
 
-`android/app/src/main/kotlin/.../MainActivity.kt` went from 335 lines to five —
-all of the printing, discovery and Star SDK code moved into the plugin.
+A host's `MainActivity.kt` typically shrinks dramatically once adopted — in the
+package's own origin app it went from 335 lines to five — because all of the
+printing, discovery and Star SDK code moves into the plugin.

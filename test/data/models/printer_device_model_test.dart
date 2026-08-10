@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('PrinterDeviceModel.fromChannel', () {
     test('parses a well-formed map', () {
-      final device = PrinterDeviceModel.fromChannel({
+      final device = PrinterDeviceModel.fromChannel(const {
         'id': 'ABC-123',
         'interfaceType': 'Lan',
       });
@@ -30,27 +30,27 @@ void main() {
 
     test('unknown, null, or missing interfaceType falls back to usb', () {
       expect(
-        PrinterDeviceModel.fromChannel({
+        PrinterDeviceModel.fromChannel(const {
           'id': 'x',
           'interfaceType': 'not-a-real-type',
         }).interfaceType,
         PrinterInterfaceType.usb,
       );
       expect(
-        PrinterDeviceModel.fromChannel({
+        PrinterDeviceModel.fromChannel(const {
           'id': 'x',
           'interfaceType': null,
         }).interfaceType,
         PrinterInterfaceType.usb,
       );
       expect(
-        PrinterDeviceModel.fromChannel({'id': 'x'}).interfaceType,
+        PrinterDeviceModel.fromChannel(const {'id': 'x'}).interfaceType,
         PrinterInterfaceType.usb,
       );
     });
 
     test('non-String values are coerced via toString()', () {
-      final device = PrinterDeviceModel.fromChannel({
+      final device = PrinterDeviceModel.fromChannel(const {
         'id': 12345,
         'interfaceType': 'Bluetooth',
       });
@@ -60,7 +60,8 @@ void main() {
     });
 
     test('missing id yields an empty id and isValid is false, not a throw', () {
-      final device = PrinterDeviceModel.fromChannel({'interfaceType': 'Usb'});
+      final device =
+          PrinterDeviceModel.fromChannel(const {'interfaceType': 'Usb'});
 
       expect(device.id, '');
       expect(device.isValid, isFalse);

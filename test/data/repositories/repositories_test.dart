@@ -101,8 +101,8 @@ class FakeSelectedPrinterDataSource implements SelectedPrinterDataSource {
 void main() {
   const device =
       PrinterDevice(id: 'device-1', interfaceType: PrinterInterfaceType.usb);
-  final job = PrintJob(
-    payload: const HtmlPayload('<html></html>'),
+  const job = PrintJob(
+    payload: HtmlPayload('<html></html>'),
     device: device,
     paperWidth: PaperWidth.html,
   );

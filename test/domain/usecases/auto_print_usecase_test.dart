@@ -51,7 +51,7 @@ void main() {
     // their own library (PrintPayload is sealed, its leaves are final).
     registerFallbackValue(payload);
     registerFallbackValue(
-      PrintJob(
+      const PrintJob(
           payload: payload, device: validDevice, paperWidth: PaperWidth.html),
     );
     registerFallbackValue(validDevice);

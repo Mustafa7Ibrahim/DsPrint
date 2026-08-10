@@ -29,7 +29,8 @@ void main() {
   setUpAll(() {
     registerFallbackValue(payload);
     registerFallbackValue(
-      PrintJob(payload: payload, device: device, paperWidth: PaperWidth.html),
+      const PrintJob(
+          payload: payload, device: device, paperWidth: PaperWidth.html),
     );
   });
 
