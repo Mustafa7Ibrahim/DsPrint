@@ -1,11 +1,12 @@
-import 'package:ds_print/ds_print.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/config/ds_print_strings.dart';
+import '../../core/config/ds_print_theme.dart';
 import '../../core/di/ds_print_injection.dart';
 import '../cubit/invoice_preview_cubit.dart';
 import '../cubit/invoice_preview_state.dart';
+import '../renderer/surface_invoice_renderer.dart';
 import '../widgets/ds_print_app_bar.dart';
 import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_message_dialog.dart';
@@ -40,27 +41,18 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
   DsPrintWebSurfaceHandle? _surface;
 
   void _handlePrint() {
-    // final surface = _surface;
-    DsPrint.printUrlSilently(
-      widget.url,
-    );
-    // context.read<InvoicePreviewCubit>().capture(
-    //       widget.url,
-    //       // Capture the invoice already on screen. Falling back to null (the
-    //       // injected headless renderer) only matters if the surface somehow
-    //       // hasn't reported in yet — it can't print a page it never rendered.
-    //       renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
-    //     );
+    final surface = _surface;
+    context.read<InvoicePreviewCubit>().capture(
+          widget.url,
+          // Capture the invoice already on screen. Falling back to null (the
+          // injected headless renderer) only matters if the surface somehow
+          // hasn't reported in yet — it can't print a page it never rendered.
+          renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
+        );
   }
 
   void _handleState(BuildContext context, InvoicePreviewState state) {
-    if (state is InvoicePreviewCaptured) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => PrinterPickerScreen(payload: state.payload),
-        ),
-      );
-    } else if (state is InvoicePreviewFailure) {
+    if (state is InvoicePreviewFailure) {
       DsPrintMessageDialog.show(
         context,
         DsPrintStrings.of(context).forFailure(state.failure),
@@ -92,12 +84,32 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
                 if (state is InvoicePreviewLoading)
                   const DsPrintLoadingIndicator(),
                 if (state is InvoicePreviewCapturing)
-                  const DsPrintCapturingScrim(),
+                  const _OpaquePrintingCover(),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// Covers the WebView while it resizes for capture, so the resize itself is
+/// never visible — only the standard loading spinner. Unlike
+/// [DsPrintFrozenScreenCover] (used by the silent overlay path elsewhere),
+/// there's no other screen to freeze here: this *is* the screen, so an opaque
+/// fill in the app's own background colour is enough.
+class _OpaquePrintingCover extends StatelessWidget {
+  const _OpaquePrintingCover();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: DsPrintTheme.of(context).background),
+        const DsPrintCapturingScrim(),
+      ],
     );
   }
 }

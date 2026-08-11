@@ -121,7 +121,11 @@ void dsPrintInjection() {
 
   // cubits
   dsPrintSl.registerFactory(
-      () => InvoicePreviewCubit(dsPrintSl<CaptureInvoiceUseCase>()));
+    () => InvoicePreviewCubit(
+      dsPrintSl<CaptureInvoiceUseCase>(),
+      dsPrintSl<AutoPrintUseCase>(),
+    ),
+  );
   dsPrintSl.registerFactory(
     () => PrintJobCubit(
         autoPrint: dsPrintSl<AutoPrintUseCase>(),
