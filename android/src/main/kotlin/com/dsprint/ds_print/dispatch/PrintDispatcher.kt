@@ -18,8 +18,15 @@ sealed class PrintRequest {
         val widthDots: Int,
     ) : PrintRequest()
 
+    /**
+     * [slices] is the invoice split into vertical bands, top to bottom, each a
+     * base64 PNG. Long invoices have to be captured in pieces because a GPU
+     * cannot allocate a texture as tall as the whole page; the bands abut
+     * exactly, so printing them back to back reproduces the document. A short
+     * receipt arrives as a single-element list.
+     */
     data class Image(
-        val base64: String,
+        val slices: List<String>,
         val printerId: String,
         val printerType: String,
         val widthDots: Int,
@@ -64,8 +71,12 @@ class PrintDispatcher(
             printerType = channelRequest.printerType,
             widthDots = channelRequest.widthDots,
         )
+        // Newline is an unambiguous separator: base64's alphabet is
+        // `A-Z a-z 0-9 + / =`, and the Dart side never wraps its output. A
+        // payload captured before slicing existed contains no newline, splits
+        // to one element, and prints exactly as it always did.
         "base64" -> PrintRequest.Image(
-            base64 = payload,
+            slices = payload.split('\n').filter { it.isNotBlank() },
             printerId = channelRequest.printerId,
             printerType = channelRequest.printerType,
             widthDots = channelRequest.widthDots,

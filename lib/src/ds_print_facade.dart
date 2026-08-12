@@ -94,7 +94,8 @@ class DsPrint {
 
   static Future<Either<DsPrintFailure, Unit>> printBase64(String base64,
       {int copies = 1}) {
-    return dsPrintResolve<AutoPrintUseCase>()(ImageBase64Payload(base64),
+    return dsPrintResolve<AutoPrintUseCase>()(
+        ImageBase64Payload.single(base64),
         copies: copies);
   }
 

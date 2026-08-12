@@ -192,18 +192,19 @@ paths share. In the host app this logic existed twice, in
 `tax_invoice_screen.dart` and `logic_screenshoot.dart`, and had already drifted.
 
 ```
-expandDocument()        → strip overflow/height/padding constraints via JS
-readScrollHeight()      → initial document height
-stabilize()             → poll until 3 consecutive reads differ by <1px
-trimToContentBottom()   → find the real content bottom, trim trailing whitespace
-resolvePixelRatio()     → sqrt(8_000_000 / (w*h)).clamp(1.5, 10)
-boundary.toPngBytes()   → RepaintBoundary → ui.Image → PNG → base64
+expandDocument()          → scroll to top; strip overflow/height/padding via JS
+readScrollHeight()        → initial document height
+stabilize()               → poll until 3 consecutive reads differ by <1px
+trimToContentBottom()     → find the real content bottom, drop trailing space
+resolveCapturePixelRatio()→ min(paperDots / width, 4096 / longest side)
+─── per slice, until the whole document is covered ────
+  scrollTo(covered)       → returns where the browser *actually* landed
+  toPngBytes(ratio, ...)  → RepaintBoundary → ui.Image → crop → PNG → base64
 ─────────────────────── finally ───────────────────────
-restoreDocument()       → put the DOM back
-onCaptureHeight(null)   → collapse the widget back to normal layout
+restoreDocument()         → put the DOM back and return to the top
 ```
 
-Three details that are load-bearing:
+Four details that are load-bearing:
 
 **Why poll for stability at all.** `scrollHeight` is correct only once the
 browser has laid out everything — late images, web fonts and expanding rows all
@@ -211,10 +212,30 @@ change it. Reading it once produces invoices cut off mid-table. Three
 consecutive stable reads (1.5s of quiet) avoids the false positive where the
 height pauses between two expansions. Capped at 40 polls / 20 seconds.
 
-**Why the pixel ratio is computed, not fixed.** `toImage` allocates
-`width × height × ratio²` pixels. A long invoice at a fixed ratio of 3 can
-exhaust memory; a short one at ratio 1 prints fuzzy. `sqrt(8M / area)` targets a
-constant ~8-megapixel budget, clamped to a legible floor of 1.5.
+**Why the document is sliced.** The obvious design — grow the WebView to the
+full document height and take one screenshot — asks the GPU for a texture taller
+than it can allocate, and on Mali that aborts the process rather than failing
+softly (see *Constraints and gotchas*). So the WebView is a fixed size and the
+document is scrolled past it one viewport at a time. Consecutive slices abut
+exactly; thermal paper is continuous and `actionPrintImage` adds no feed, so N
+slices print as one unbroken invoice with a single cut.
+
+**Why `scrollTo` reports back where it landed.** The browser clamps at
+`scrollHeight - viewportHeight`, so the last page of a document lands short of
+where it was asked to go, and the frame then repeats rows the previous slice
+already has. `run()` subtracts the difference and crops that overlap off the top
+of the final slice. Assuming the request was honoured would silently duplicate a
+band of the invoice. A CSS `translateY` would avoid the clamp, but can promote
+the whole body to one composited layer — reintroducing the oversized allocation
+inside the WebView's own renderer.
+
+**Why the pixel ratio comes from the printer, not the screen.**
+`ImageParameter(bitmap, widthDotsPaper)` rescales whatever it is handed to
+`PaperWidth.image` = 595 dots. Every pixel of width past that is rasterised,
+encoded, base64'd, chunked over the platform channel and then thrown away by the
+SDK — while still costing a proportionally larger GPU texture. Targeting the
+paper width exactly is simultaneously the sharpest possible print and the
+smallest allocation that achieves it.
 
 **Why `restoreDocument` is in a `finally`.** The original restored the DOM on
 the success path and inside one `catch`, so any other error left the page
@@ -390,11 +411,51 @@ legacy `CacheKeys`, so printers paired before the migration still work.
 
 ## 8. Constraints and gotchas
 
-**Android WebView + `RepaintBoundary`.** Under Hybrid Composition the WebView is
-a native `SurfaceView` and cannot paint into an offscreen layer — it captures
-black. `DsPrintWebSurface` therefore mounts the `RepaintBoundary` *only* while a
-capture is in flight (`_captureHeight != null`); the rest of the time the
-platform view renders directly.
+**Android WebView + `RepaintBoundary`.** Under true Hybrid Composition the
+WebView is a native `SurfaceView` composited by Android, and `toImage` on a
+`PlatformViewLayer` captures a hole rather than the page. `DsPrintWebSurface`
+used to hedge against that by mounting the `RepaintBoundary` only while a
+capture was in flight — which turned out to cost far more than it bought (see
+*The GPU texture limit* below), so the boundary is now permanently mounted. That
+captures work at all is the evidence this WebView is texture-backed, not HC. If
+captures ever do come back black, the fix is a `GlobalKey` on the
+`WebViewWidget`, not a conditional tree.
+
+**The GPU texture limit.** Mali's `GL_MAX_TEXTURE_SIZE` is 4096 on older parts
+and 8192 on most current ones, and it is a **per-dimension** limit, not a total
+area budget. A receipt is an extreme aspect ratio — a few hundred px wide by
+thousands tall — so it hits the limit in one dimension long before it looks
+large. Exceeding it does not degrade gracefully: the driver logs
+`BAD ALLOC from gles_texture_egl_image_get_2d_template`, buffer allocations
+start returning null (`GPUAUX ... Null anb`), and HWUI eventually aborts the
+process from its RenderThread with
+`Failed to set damage region on surface, error=EGL_BAD_ACCESS`.
+
+Two rules follow, and both are load-bearing:
+
+* **Never lay a platform view out taller than the viewport.** Its backing
+  surface is `height × devicePixelRatio` physical px, so a WebView sized to a
+  3,000 px document needs an 8,250 px surface at dpr 2.75.
+* **Never rasterise more than one viewport at a time.** `resolveCapturePixelRatio`
+  caps every dimension at `maxTextureDimensionPx`, and that cap is applied
+  *after* the paper-width target so it can push the ratio arbitrarily low. There
+  is deliberately no legibility floor: a soft print beats an aborted process.
+
+**Platform view identity.** `Widget.canUpdate` compares `runtimeType`, so
+returning structurally different trees from the same builder unmounts the
+subtree and destroys the native platform view with it. Recreating a platform
+view tears down a `Surface` that HWUI may still have a draw in flight against —
+another route to `EGL_BAD_ACCESS`. `DsPrintWebSurface` therefore builds one
+constant tree and holds its `WebViewWidget` in a field.
+
+**`OffsetLayer.toImage` on the root layer.** `DsPrintScreenFreeze` snapshots the
+live root `RenderView` layer, which means running `addToScene` on a layer the
+compositor currently owns and handing its live `_engineLayer` to a second
+`SceneBuilder`. When that layer contains a platform view the throwaway scene
+also re-issues `addPlatformView`, disturbing `PlatformViewsController`'s
+per-frame surface bookkeeping for a frame that is never presented. It is
+therefore only used by `OverlayInvoiceRenderer`, and only *before* the capture
+WebView is inserted.
 
 **`Localizations` in `initState`.** Reading `Localizations` (for the
 `Accept-Language` header) inside `initState` throws

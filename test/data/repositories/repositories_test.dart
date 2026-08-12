@@ -22,11 +22,11 @@ import 'package:ds_print/src/domain/ports/invoice_render_port.dart';
 class FakeInvoiceRenderPort implements InvoiceRenderPort {
   FakeInvoiceRenderPort({this.result, this.errorToThrow});
 
-  final String? result;
+  final List<String>? result;
   final Object? errorToThrow;
 
   @override
-  Future<String> renderUrlToBase64Png(String url) async {
+  Future<List<String>> renderUrlToPngSlices(String url) async {
     if (errorToThrow != null) throw errorToThrow!;
     return result!;
   }
@@ -110,14 +110,41 @@ void main() {
   group('InvoiceCaptureRepositoryImpl', () {
     test('success -> Right(ImageBase64Payload)', () async {
       final repo = InvoiceCaptureRepositoryImpl(
-          FakeInvoiceRenderPort(result: 'base64=='));
+          FakeInvoiceRenderPort(result: ['base64==']));
 
       final result = await repo.captureUrl('https://example.com');
 
       expect(
           result,
           const Right<DsPrintFailure, ImageBase64Payload>(
-              ImageBase64Payload('base64==')));
+              ImageBase64Payload(['base64=='])));
+    });
+
+    test('every slice is carried through, in order', () async {
+      final repo = InvoiceCaptureRepositoryImpl(
+          FakeInvoiceRenderPort(result: ['aa==', 'bb==', 'cc==']));
+
+      final result = await repo.captureUrl('https://example.com');
+
+      result.fold(
+        (_) => fail('expected Right'),
+        (payload) {
+          expect(payload.slices, ['aa==', 'bb==', 'cc==']);
+          // The wire format the native side splits back apart.
+          expect(payload.raw, 'aa==\nbb==\ncc==');
+          expect(payload.raw.split(ImageBase64Payload.separator),
+              payload.slices);
+        },
+      );
+    });
+
+    test('an empty slice list is a failure, not an empty print', () async {
+      final repo =
+          InvoiceCaptureRepositoryImpl(FakeInvoiceRenderPort(result: []));
+
+      final result = await repo.captureUrl('https://example.com');
+
+      expect(result.isLeft(), isTrue);
     });
 
     test('CaptureException -> Left(CaptureFailure) with matching details',

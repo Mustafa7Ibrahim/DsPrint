@@ -84,52 +84,78 @@ class StarPrinterGateway {
         }
     }
 
-    /** Decodes [base64Image] straight to a bitmap and prints it. */
+    /**
+     * Decodes each of [base64Slices] to a bitmap and prints them as one
+     * document, in order.
+     *
+     * Slices are vertical bands of a single invoice, not separate receipts:
+     * `actionPrintImage` adds no feed of its own and thermal paper is
+     * continuous, so consecutive bands rejoin into one unbroken page with a
+     * single cut at the end.
+     *
+     * A decode failure on any slice aborts the whole job. Printing the
+     * survivors would emit a silently incomplete invoice, which is worse than
+     * printing nothing and reporting the failure.
+     */
     fun printBase64(
         printerId: String,
         context: Context,
-        base64Image: String,
+        base64Slices: List<String>,
         widthDotsPaper: Int,
         printerType: String = "Usb",
         onResult: (success: Boolean) -> Unit,
     ) {
-        val bitmap = base64ToBitmap(base64Image)
-        if (bitmap == null) {
+        val bitmaps = base64Slices.map { base64ToBitmap(it) }
+        if (bitmaps.isEmpty() || bitmaps.any { it == null }) {
+            Log.d(TAG, "printBase64() - ${bitmaps.count { it == null }} of ${bitmaps.size} slice(s) failed to decode")
+            bitmaps.forEach { it?.recycle() }
             onResult(false)
             return
         }
+        val pages = bitmaps.filterNotNull()
 
         val settings = StarConnectionSettings(toInterfaceType(printerType), printerId)
         val printer = StarPrinter(settings, context)
 
         CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
+                // Reassigned rather than chained-and-discarded so this is
+                // correct whether the SDK's builder mutates in place or returns
+                // a new instance.
+                var printerBuilder = PrinterBuilder()
+                pages.forEach {
+                    printerBuilder =
+                        printerBuilder.actionPrintImage(ImageParameter(it, widthDotsPaper))
+                }
+                // These styles follow the images rather than preceding them,
+                // which is where they have always sat on this path. They are
+                // therefore no-ops for the images just emitted — moving them
+                // above would start centring output that prints left-aligned
+                // today, so the order is preserved deliberately.
+                printerBuilder = printerBuilder
+                    .styleInternationalCharacter(InternationalCharacterType.Usa)
+                    .styleCharacterSpace(0.0)
+                    .styleAlignment(Alignment.Center)
+                    .actionCut(CutType.Partial)
+
                 val builder = StarXpandCommandBuilder()
-                builder.addDocument(
-                    DocumentBuilder()
-                        .addPrinter(
-                            PrinterBuilder()
-                                .actionPrintImage(
-                                    ImageParameter(bitmap, widthDotsPaper)
-                                )
-                                .styleInternationalCharacter(InternationalCharacterType.Usa)
-                                .styleCharacterSpace(0.0)
-                                .styleAlignment(Alignment.Center)
-                                .actionCut(CutType.Partial)
-                        )
-                )
+                builder.addDocument(DocumentBuilder().addPrinter(printerBuilder))
                 val commands = builder.getCommands()
 
                 printer.openAsync().await()
                 printer.printAsync(commands).await()
 
-                Log.d(TAG, "Success")
+                Log.d(TAG, "Success (${pages.size} slice(s))")
                 onResult(true)
             } catch (e: Exception) {
                 Log.d(TAG, "Error: $e")
                 onResult(false)
             } finally {
                 printer.closeAsync().await()
+                // Safe here and not before: both awaits have returned, so the
+                // SDK is done reading these. A long invoice can be a dozen
+                // slices, so this is worth doing rather than waiting for GC.
+                pages.forEach { it.recycle() }
             }
         }
     }

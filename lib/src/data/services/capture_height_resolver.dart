@@ -1,4 +1,4 @@
-import 'dart:math' show sqrt;
+import 'dart:math' show max, min;
 
 import '../platform/ds_web_controller.dart';
 
@@ -25,6 +25,7 @@ class CaptureHeightResolver {
 
   Future<void> expandDocument() async {
     await web.runJavaScript('''
+        window.scrollTo(0, 0);
         document.body.style.overflow = 'visible';
         document.body.style.height = 'auto';
         document.body.style.minHeight = '0px';
@@ -48,12 +49,8 @@ class CaptureHeightResolver {
 
   /// Polls `scrollHeight` until [requiredStableReads] consecutive reads
   /// differ by less than 1 px, or [maxPolls] is reached (whichever first).
-  /// [onHeight] fires on every poll so the caller can grow the webview live
-  /// while measuring. Unparseable reads fall back to the previous value.
-  Future<double> stabilize(
-    double initial, {
-    void Function(double)? onHeight,
-  }) async {
+  /// Unparseable reads fall back to the previous value.
+  Future<double> stabilize(double initial) async {
     var prev = initial;
     var last = initial;
     var stableCount = 0;
@@ -64,7 +61,6 @@ class CaptureHeightResolver {
       );
       final current = double.tryParse(result) ?? prev;
       last = current;
-      onHeight?.call(current);
       if ((current - prev).abs() < 1.0) {
         stableCount++;
         if (stableCount >= requiredStableReads) return current;
@@ -95,8 +91,39 @@ class CaptureHeightResolver {
     return trimmed;
   }
 
+  /// Both [expandDocument] and [restoreDocument] reset the scroll position, so
+  /// a capture always starts at the top of the document no matter where the
+  /// user had scrolled the preview to, and always leaves them back at the top
+  /// rather than parked on the last slice.
+  ///
+  /// Scrolls the document so [offset] is at the top of the viewport, and
+  /// returns where it *actually* landed.
+  ///
+  /// The read-back matters: the browser clamps at
+  /// `scrollHeight - viewportHeight` and quantises to whole device pixels, so
+  /// the last page of a document almost never lands where it was asked to. The
+  /// caller uses the difference to trim the overlap instead of assuming the
+  /// request was honoured — get this wrong and slices silently repeat or skip
+  /// a band of the invoice.
+  ///
+  /// Scrolling (rather than shifting the content with a CSS transform) is
+  /// deliberate: browsers rasterise long documents in tiles as they scroll,
+  /// whereas `transform: translateY` can promote the whole body to one
+  /// composited layer — reintroducing, inside the WebView's own renderer, the
+  /// oversized-texture allocation this pipeline exists to avoid.
+  Future<double> scrollTo(double offset) async {
+    final result = await web.runJavaScriptReturningResult('''
+        (function() {
+          window.scrollTo(0, $offset);
+          return window.pageYOffset;
+        })()
+      ''');
+    return double.tryParse(result) ?? offset;
+  }
+
   Future<void> restoreDocument() async {
     await web.runJavaScript('''
+        window.scrollTo(0, 0);
         document.body.style.overflow = '';
         document.body.style.height = '';
         document.body.style.minHeight = '';
@@ -109,16 +136,40 @@ class CaptureHeightResolver {
       ''');
   }
 
-  /// Scales pixel ratio so total pixels stay near 8 M — keeps the base64
-  /// payload small enough for memory and the native print channel's buffer.
-  /// Guards against non-positive inputs (which would otherwise produce
-  /// NaN/Infinity) by returning the 1.5 lower clamp.
-  static double resolvePixelRatio({
+  /// A conservative floor for Mali's `GL_MAX_TEXTURE_SIZE`, which is 4096 on
+  /// older parts and 8192 on most current ones. Under-estimating is safe:
+  /// because the capture is sliced, a smaller cap only means more slices —
+  /// never a worse print. Over-estimating aborts the app, so this errs low.
+  static const double maxTextureDimensionPx = 4096;
+
+  /// Pixels of paper width the Star printer actually has — `PaperWidth.image`.
+  /// Imported as a plain number rather than the value object to keep this
+  /// service free of domain types, exactly as the rest of the class is.
+  static const int defaultPaperDots = 595;
+
+  /// The pixel ratio to rasterise one slice at.
+  ///
+  /// Driven by the printer, not the screen. `ImageParameter(bitmap, dots)`
+  /// rescales whatever it is handed to [paperDots] wide, so every pixel of
+  /// width beyond that is decoded, transferred and then thrown away — while
+  /// still costing a proportionally larger GPU texture. Targeting the paper
+  /// width exactly is both the sharpest possible print and the smallest
+  /// allocation that achieves it.
+  ///
+  /// The [maxDimensionPx] cap is applied *after* the target and can push the
+  /// ratio arbitrarily low. That ordering is the point: the previous
+  /// implementation clamped to a legibility *floor* of 1.5, which is what let
+  /// a tall invoice demand a texture the GPU could not allocate. A soft print
+  /// beats an aborted process.
+  static double resolveCapturePixelRatio({
     required double captureWidth,
-    required double height,
+    required double sliceHeight,
+    int paperDots = defaultPaperDots,
+    double maxDimensionPx = maxTextureDimensionPx,
   }) {
-    if (captureWidth <= 0 || height <= 0) return 1.5;
-    final ratio = sqrt(8000000.0 / (captureWidth * height));
-    return ratio.clamp(1.5, 10.0);
+    if (captureWidth <= 0 || sliceHeight <= 0) return 1.0;
+    final target = paperDots / captureWidth;
+    final cap = maxDimensionPx / max(captureWidth, sliceHeight);
+    return min(target, cap);
   }
 }

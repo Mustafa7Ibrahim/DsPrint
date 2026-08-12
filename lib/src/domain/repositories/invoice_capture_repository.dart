@@ -5,7 +5,7 @@ import '../entities/print_payload.dart';
 import '../ports/invoice_render_port.dart';
 
 abstract class InvoiceCaptureRepository {
-  /// Captures [url] as a printable PNG.
+  /// Captures [url] as printable PNG slices.
   ///
   /// [renderer] overrides the injected default for this call only. The headless
   /// path leaves it null and gets the overlay renderer; the preview screen

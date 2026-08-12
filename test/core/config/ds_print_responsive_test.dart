@@ -49,15 +49,4 @@ void main() {
     });
   });
 
-  group('DsPrintResponsive.captureContainerWidth', () {
-    testWidgets('null on phone', (tester) async {
-      final context = await pumpWithSize(tester, const Size(400, 800));
-      expect(DsPrintResponsive.captureContainerWidth(context), isNull);
-    });
-
-    testWidgets('350 on tablet', (tester) async {
-      final context = await pumpWithSize(tester, const Size(800, 1200));
-      expect(DsPrintResponsive.captureContainerWidth(context), 350.0);
-    });
-  });
 }

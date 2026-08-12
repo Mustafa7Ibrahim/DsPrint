@@ -119,7 +119,8 @@ GoRoute(
 GoRoute(
   path: 'printer/base64',
   builder: (context, state) =>
-      PrinterPickerScreen(payload: ImageBase64Payload(state.extra as String)),
+      PrinterPickerScreen(
+          payload: ImageBase64Payload.single(state.extra as String)),
 ),
 ```
 

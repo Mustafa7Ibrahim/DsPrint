@@ -114,7 +114,7 @@ void main() {
         () {
       expect(wireTypeFor(const HtmlPayload('<html></html>')),
           PrintPayloadWireType.html);
-      expect(wireTypeFor(const ImageBase64Payload('base64==')),
+      expect(wireTypeFor(const ImageBase64Payload(['base64=='])),
           PrintPayloadWireType.base64);
 
       final htmlModel = PrintChannelRequestModel(
@@ -135,7 +135,7 @@ void main() {
         printerId: 'device-1',
         printerType: PrinterInterfaceType.usb,
         width: PaperWidth.image,
-        typeData: wireTypeFor(const ImageBase64Payload('base64==')),
+        typeData: wireTypeFor(const ImageBase64Payload(['base64=='])),
       );
       expect(imageModel.toJson()['type_data'], 'base64');
     });

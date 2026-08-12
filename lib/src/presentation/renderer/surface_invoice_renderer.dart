@@ -9,7 +9,7 @@ import '../widgets/ds_print_web_surface.dart';
 /// tapping Print downloaded and rendered the invoice a second time in a hidden
 /// overlay, while an opaque cover hid the perfectly good copy underneath.
 ///
-/// [renderUrlToBase64Png] ignores its `url` argument: the surface has finished
+/// [renderUrlToPngSlices] ignores its `url` argument: the surface has finished
 /// loading that exact page (the cubit only permits a capture from
 /// `InvoicePreviewReady`), so re-requesting it would buy nothing but latency.
 class SurfaceInvoiceRenderer implements InvoiceRenderPort {
@@ -18,5 +18,5 @@ class SurfaceInvoiceRenderer implements InvoiceRenderPort {
   const SurfaceInvoiceRenderer(this._surface);
 
   @override
-  Future<String> renderUrlToBase64Png(String url) => _surface.capture();
+  Future<List<String>> renderUrlToPngSlices(String url) => _surface.capture();
 }

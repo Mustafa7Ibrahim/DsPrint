@@ -17,7 +17,7 @@ class OverlayInvoiceRenderer implements InvoiceRenderPort {
   static const _timeout = Duration(seconds: 60);
 
   @override
-  Future<String> renderUrlToBase64Png(String url) async {
+  Future<List<String>> renderUrlToPngSlices(String url) async {
     final context = RootContextResolver.resolve();
     if (context == null) {
       throw const CaptureException('no BuildContext available');
@@ -29,9 +29,18 @@ class OverlayInvoiceRenderer implements InvoiceRenderPort {
 
     // Grabbed before the overlay goes up, so it shows the app as the user last
     // saw it. Null is fine — the cover falls back to a plain opaque fill.
+    //
+    // Deliberately *before* the capture WebView is inserted. `capture()` runs
+    // `OffsetLayer.toImage` on the live root layer, and if that layer contains
+    // a platform view the throwaway scene it builds re-issues `addPlatformView`
+    // and disturbs `PlatformViewsController`'s per-frame surface bookkeeping
+    // for a frame that is never presented. Ordering it here keeps ds_print's
+    // own WebView out of that scene; a host screen that owns a platform view of
+    // its own is still exposed, which is why the capture swallows everything
+    // and falls back to an opaque fill.
     final frozenScreen = await DsPrintScreenFreeze.capture();
 
-    final completer = Completer<String>();
+    final completer = Completer<List<String>>();
     final entry = OverlayEntry(
       builder: (_) => Stack(
         children: [
@@ -44,8 +53,8 @@ class OverlayInvoiceRenderer implements InvoiceRenderPort {
             child: DsPrintWebSurface(
               url: url,
               autoCaptureOnLoad: true,
-              onCaptured: (base64) {
-                if (!completer.isCompleted) completer.complete(base64);
+              onCaptured: (slices) {
+                if (!completer.isCompleted) completer.complete(slices);
               },
               onFailed: (error) {
                 if (!completer.isCompleted) completer.completeError(error);

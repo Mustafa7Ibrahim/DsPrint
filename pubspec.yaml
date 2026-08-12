@@ -1,6 +1,6 @@
 name: ds_print
 description: Reusable invoice preview and thermal-printing plugin (Star Micronics StarXpand).
-version: 0.1.0
+version: 0.1.1
 publish_to: "none"
 repository: https://github.com/Mustafa7Ibrahim/DsPrint
 homepage: https://github.com/Mustafa7Ibrahim/DsPrint

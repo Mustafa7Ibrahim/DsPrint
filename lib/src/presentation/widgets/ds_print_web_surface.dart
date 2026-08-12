@@ -14,11 +14,29 @@ import '../../data/services/invoice_capture_runner.dart';
 /// preview screen and the headless overlay renderer, so the two only ever
 /// differ in what surrounds this widget — never in how the page is loaded
 /// or captured.
+///
+/// **The widget tree built here is deliberately constant.** It used to switch
+/// between `SizedBox.expand(webView)` while idle and
+/// `SingleChildScrollView(RepaintBoundary(...))` while capturing, growing the
+/// WebView to the full document height in the process. Two native consequences
+/// followed, and together they crashed the app:
+///
+/// * `Widget.canUpdate` compares `runtimeType`, so swapping `SizedBox` for
+///   `SingleChildScrollView` unmounted the whole subtree — destroying and
+///   recreating the native platform view twice per capture. Tearing down a
+///   `Surface` while HWUI still has a draw in flight against it aborts the
+///   process with `EGL_BAD_ACCESS`.
+/// * A platform view laid out at the document height needs a backing surface
+///   `height × devicePixelRatio` physical px tall, which passes Mali's
+///   `GL_MAX_TEXTURE_SIZE` at around 3,000 logical px.
+///
+/// So the WebView is created once, sized to the viewport, and never resized or
+/// reparented; [InvoiceCaptureRunner] scrolls the document past it instead.
 class DsPrintWebSurface extends StatefulWidget {
   final String url;
   final bool autoCaptureOnLoad;
   final void Function(DsPrintWebSurfaceHandle handle)? onReady;
-  final void Function(String base64)? onCaptured;
+  final void Function(List<String> slices)? onCaptured;
   final void Function(Object error)? onFailed;
   final VoidCallback? onPageFinished;
 
@@ -38,8 +56,13 @@ class DsPrintWebSurface extends StatefulWidget {
 
 class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
   late final WebViewController _controller;
+
+  /// Built once and held, not constructed in `build`. Even with a stable tree
+  /// shape this guarantees the element backing the platform view is only ever
+  /// updated, never replaced.
+  late final Widget _webView;
+
   final GlobalKey _boundaryKey = GlobalKey();
-  final ValueNotifier<double?> _captureHeight = ValueNotifier<double?>(null);
   bool _hasAutoCaptured = false;
   bool _hasRequestedUrl = false;
 
@@ -64,6 +87,7 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
           },
         ),
       );
+    _webView = WebViewWidget(controller: _controller);
     widget.onReady?.call(DsPrintWebSurfaceHandle._(this));
   }
 
@@ -96,8 +120,7 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
     _capture().ignore();
   }
 
-  Future<String> _capture() async {
-    final captureWidth = DsPrintResponsive.captureWidth(context);
+  Future<List<String>> _capture() async {
     final webController = WebViewDsWebController(_controller);
     final runner = InvoiceCaptureRunner(
       web: webController,
@@ -105,15 +128,21 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
       resolver: CaptureHeightResolver(web: webController),
     );
     try {
-      final base64 = await runner.run(
-        captureWidth: captureWidth,
-        onCaptureHeight: (height) {
-          if (!mounted) return;
-          _captureHeight.value = height;
-        },
+      // Measured from the boundary itself rather than from
+      // DsPrintResponsive.captureWidth: on a screen narrower than the nominal
+      // capture width the SizedBox below is squeezed, and a pixel ratio derived
+      // from the nominal value would produce a capture that is not the paper
+      // width after all.
+      final box =
+          _boundaryKey.currentContext?.findRenderObject() as RenderBox?;
+      final size = box?.size ?? Size.zero;
+
+      final slices = await runner.run(
+        captureWidth: size.width,
+        viewportHeight: size.height,
       );
-      widget.onCaptured?.call(base64);
-      return base64;
+      widget.onCaptured?.call(slices);
+      return slices;
     } catch (e) {
       widget.onFailed?.call(e);
       rethrow;
@@ -121,38 +150,22 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
   }
 
   @override
-  void dispose() {
-    _captureHeight.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<double?>(
-      valueListenable: _captureHeight,
-      builder: (context, height, _) {
-        final webView = WebViewWidget(controller: _controller);
-        if (height == null) {
-          // Rendered directly, with no RepaintBoundary: on Android the
-          // WebView can fall back to Hybrid Composition (a native
-          // SurfaceView), which cannot paint into an offscreen
-          // RepaintBoundary layer and renders black. The boundary below is
-          // only ever mounted while a capture is in progress.
-          return SizedBox.expand(child: webView);
-        }
-        return SingleChildScrollView(
-          child: RepaintBoundary(
-            key: _boundaryKey,
-            child: Container(
-              color: Colors.white,
-              width: DsPrintResponsive.captureContainerWidth(context),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: SizedBox(
-                  width: double.infinity, height: height, child: webView),
-            ),
+    // Constrained to the capture width at all times, not just while capturing.
+    // The document therefore never reflows between what the user previewed and
+    // what gets printed, and on a tablet the preview becomes a receipt-width
+    // column — which is exactly what comes out of the printer.
+    return Center(
+      child: SizedBox(
+        width: DsPrintResponsive.captureWidth(context),
+        child: RepaintBoundary(
+          key: _boundaryKey,
+          child: ColoredBox(
+            color: Colors.white,
+            child: SizedBox.expand(child: _webView),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -164,5 +177,5 @@ class DsPrintWebSurfaceHandle {
 
   const DsPrintWebSurfaceHandle._(this._state);
 
-  Future<String> capture() => _state._capture();
+  Future<List<String>> capture() => _state._capture();
 }

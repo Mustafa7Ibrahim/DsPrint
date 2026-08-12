@@ -82,29 +82,41 @@ void main() {
       expect(web.returningResultCalls.length, 5);
     });
 
-    test('onHeight is called on every poll', () async {
-      final web = FakeDsWebController(['150', '150', '150']);
-      final resolver =
-          CaptureHeightResolver(web: web, pollInterval: Duration.zero);
-      final heights = <double>[];
-
-      await resolver.stabilize(150, onHeight: heights.add);
-
-      expect(heights, [150.0, 150.0, 150.0]);
-    });
-
     test('unparseable reads fall back to the previous value', () async {
       final web = FakeDsWebController(['not-a-number', '10', '10']);
       final resolver =
           CaptureHeightResolver(web: web, pollInterval: Duration.zero);
-      final heights = <double>[];
 
-      final result = await resolver.stabilize(10, onHeight: heights.add);
+      final result = await resolver.stabilize(10);
 
       // The unparseable first read must fall back to the initial value (10),
       // not propagate NaN.
-      expect(heights, [10.0, 10.0, 10.0]);
       expect(result, 10.0);
+    });
+  });
+
+  group('CaptureHeightResolver.scrollTo', () {
+    test('returns where the browser actually landed, not what was asked',
+        () async {
+      // The browser clamps at scrollHeight - viewportHeight, so the last page
+      // of a document lands short. Reporting the request back would make the
+      // caller skip the band between `actual` and `offset`.
+      final web = FakeDsWebController(['1840']);
+      final resolver =
+          CaptureHeightResolver(web: web, pollInterval: Duration.zero);
+
+      expect(await resolver.scrollTo(2000), 1840.0);
+      expect(web.returningResultCalls.single, contains('window.scrollTo(0, 2000'));
+      expect(web.returningResultCalls.single, contains('window.pageYOffset'));
+    });
+
+    test('falls back to the requested offset when the read is unparseable',
+        () async {
+      final web = FakeDsWebController(['undefined']);
+      final resolver =
+          CaptureHeightResolver(web: web, pollInterval: Duration.zero);
+
+      expect(await resolver.scrollTo(900), 900.0);
     });
   });
 
@@ -142,51 +154,92 @@ void main() {
     expect(CaptureHeightResolver.minTrimDeltaPx, 5);
   });
 
-  group('CaptureHeightResolver.resolvePixelRatio', () {
-    test('clamps to [1.5, 10.0]', () {
-      // Tiny area -> ratio would blow way past 10.0 unclamped.
-      expect(
-        CaptureHeightResolver.resolvePixelRatio(captureWidth: 10, height: 10),
-        10.0,
+  group('CaptureHeightResolver.resolveCapturePixelRatio', () {
+    // A ~900px viewport is what a real phone/tablet gives the surface.
+    const viewport = 900.0;
+
+    test('renders a slice at exactly the printer paper width', () {
+      for (final width in [390.0, 500.0]) {
+        final ratio = CaptureHeightResolver.resolveCapturePixelRatio(
+          captureWidth: width,
+          sliceHeight: viewport,
+        );
+        expect(
+          width * ratio,
+          closeTo(CaptureHeightResolver.defaultPaperDots, 0.001),
+          reason:
+              'ImageParameter rescales to the paper width, so anything wider '
+              'is decoded and transferred only to be thrown away',
+        );
+      }
+    });
+
+    test('no dimension of a real slice ever reaches the texture limit', () {
+      const width = 390.0;
+      final ratio = CaptureHeightResolver.resolveCapturePixelRatio(
+        captureWidth: width,
+        sliceHeight: viewport,
       );
-      // Huge area -> ratio would drop way below 1.5 unclamped.
+
+      expect(width * ratio,
+          lessThan(CaptureHeightResolver.maxTextureDimensionPx));
+      expect(viewport * ratio,
+          lessThan(CaptureHeightResolver.maxTextureDimensionPx));
+    });
+
+    test('the dimension cap overrides the paper-width target on a tall slice',
+        () {
+      // This is the regression that crashed the app: the old implementation
+      // clamped to a legibility *floor* of 1.5, so a tall capture demanded a
+      // texture the GPU could not allocate. Softness is the correct trade.
+      const tall = 20000.0;
+      final ratio = CaptureHeightResolver.resolveCapturePixelRatio(
+        captureWidth: 390,
+        sliceHeight: tall,
+      );
+
+      expect(ratio, lessThan(1.0));
       expect(
-        CaptureHeightResolver.resolvePixelRatio(
-            captureWidth: 100000, height: 100000),
-        1.5,
+        tall * ratio,
+        closeTo(CaptureHeightResolver.maxTextureDimensionPx, 0.001),
       );
     });
 
-    test(
-        'captureWidth * height * ratio^2 stays close to ~8M for a mid-range input',
-        () {
-      const width = 500.0;
-      const height = 1000.0;
-      final ratio = CaptureHeightResolver.resolvePixelRatio(
-          captureWidth: width, height: height);
+    test('caps on width too, not just height', () {
+      final ratio = CaptureHeightResolver.resolveCapturePixelRatio(
+        captureWidth: 9000,
+        sliceHeight: 100,
+      );
 
-      expect(ratio, greaterThanOrEqualTo(1.5));
-      expect(ratio, lessThanOrEqualTo(10.0));
-      expect(width * height * ratio * ratio, closeTo(8000000, 1));
+      expect(9000 * ratio,
+          lessThanOrEqualTo(CaptureHeightResolver.maxTextureDimensionPx));
     });
 
-    test(
-        'height <= 0 or captureWidth <= 0 returns 1.5 rather than NaN/Infinity',
-        () {
-      expect(
-          CaptureHeightResolver.resolvePixelRatio(captureWidth: 100, height: 0),
-          1.5);
-      expect(
-          CaptureHeightResolver.resolvePixelRatio(
-              captureWidth: 100, height: -5),
-          1.5);
-      expect(
-          CaptureHeightResolver.resolvePixelRatio(captureWidth: 0, height: 100),
-          1.5);
-      expect(
-          CaptureHeightResolver.resolvePixelRatio(
-              captureWidth: -5, height: 100),
-          1.5);
+    test('a caller-supplied maxDimensionPx is honoured', () {
+      final ratio = CaptureHeightResolver.resolveCapturePixelRatio(
+        captureWidth: 390,
+        sliceHeight: 1000,
+        maxDimensionPx: 500,
+      );
+
+      expect(1000 * ratio, closeTo(500, 0.001));
+    });
+
+    test('non-positive inputs return 1.0 rather than NaN/Infinity', () {
+      for (final args in [
+        (100.0, 0.0),
+        (100.0, -5.0),
+        (0.0, 100.0),
+        (-5.0, 100.0),
+      ]) {
+        expect(
+          CaptureHeightResolver.resolveCapturePixelRatio(
+            captureWidth: args.$1,
+            sliceHeight: args.$2,
+          ),
+          1.0,
+        );
+      }
     });
   });
 

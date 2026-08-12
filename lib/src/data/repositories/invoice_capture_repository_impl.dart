@@ -17,8 +17,12 @@ class InvoiceCaptureRepositoryImpl implements InvoiceCaptureRepository {
     InvoiceRenderPort? renderer,
   }) async {
     try {
-      final base64 = await (renderer ?? _renderer).renderUrlToBase64Png(url);
-      return Right(ImageBase64Payload(base64));
+      final slices =
+          await (renderer ?? _renderer).renderUrlToPngSlices(url);
+      if (slices.isEmpty) {
+        return const Left(CaptureFailure('capture produced no slices'));
+      }
+      return Right(ImageBase64Payload(slices));
     } on CaptureException catch (e) {
       return Left(CaptureFailure(e.details));
     } on DsPrintException catch (e) {
