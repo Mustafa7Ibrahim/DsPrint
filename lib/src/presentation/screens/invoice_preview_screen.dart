@@ -1,15 +1,17 @@
-import 'package:ds_print/ds_print.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/config/ds_print_strings.dart';
+import '../../core/config/ds_print_theme.dart';
 import '../../core/di/ds_print_injection.dart';
 import '../cubit/invoice_preview_cubit.dart';
 import '../cubit/invoice_preview_state.dart';
+import '../renderer/surface_invoice_renderer.dart';
 import '../widgets/ds_print_app_bar.dart';
 import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_message_dialog.dart';
 import '../widgets/ds_print_web_surface.dart';
+import 'printer_picker_screen.dart';
 
 class InvoicePreviewScreen extends StatelessWidget {
   final String url;
@@ -40,17 +42,14 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
   DsPrintWebSurfaceHandle? _surface;
 
   void _handlePrint() {
-    // final surface = _surface;
-    DsPrint.printUrlSilently(
-      widget.url,
-    );
-    // context.read<InvoicePreviewCubit>().capture(
-    //       widget.url,
-    //       // Capture the invoice already on screen. Falling back to null (the
-    //       // injected headless renderer) only matters if the surface somehow
-    //       // hasn't reported in yet — it can't print a page it never rendered.
-    //       renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
-    //     );
+    final surface = _surface;
+    context.read<InvoicePreviewCubit>().capture(
+          widget.url,
+          // Capture the invoice already on screen. Falling back to null (the
+          // injected headless renderer) only matters if the surface somehow
+          // hasn't reported in yet — it can't print a page it never rendered.
+          renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
+        );
   }
 
   void _handleState(BuildContext context, InvoicePreviewState state) {
