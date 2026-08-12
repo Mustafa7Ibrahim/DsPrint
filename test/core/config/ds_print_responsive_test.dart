@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ds_print/src/core/config/ds_print_responsive.dart';
+import 'package:ds_print/src/data/services/capture_height_resolver.dart';
 
 void main() {
   Future<BuildContext> pumpWithSize(WidgetTester tester, Size size) async {
@@ -38,14 +39,31 @@ void main() {
   });
 
   group('DsPrintResponsive.captureWidth', () {
-    testWidgets('390 on phone', (tester) async {
+    testWidgets('null on phone — the capture is as wide as the screen',
+        (tester) async {
       final context = await pumpWithSize(tester, const Size(400, 800));
-      expect(DsPrintResponsive.captureWidth(context), 390.0);
+      expect(DsPrintResponsive.captureWidth(context), isNull);
     });
 
-    testWidgets('500 on tablet', (tester) async {
+    testWidgets('350 on tablet', (tester) async {
       final context = await pumpWithSize(tester, const Size(800, 1200));
-      expect(DsPrintResponsive.captureWidth(context), 500.0);
+      expect(DsPrintResponsive.captureWidth(context), 350.0);
+    });
+
+    testWidgets(
+        'a tablet capture magnifies the page by roughly 1.8x on paper',
+        (tester) async {
+      // Regression guard on printed text size. The printer rescales to a fixed
+      // dot count, so magnification is paperDots / laid-out content width —
+      // widening the capture silently shrinks the print.
+      final context = await pumpWithSize(tester, const Size(800, 1200));
+      final contentWidth = DsPrintResponsive.captureWidth(context)! -
+          DsPrintResponsive.capturePadding.horizontal;
+
+      expect(
+        CaptureHeightResolver.defaultPaperDots / contentWidth,
+        closeTo(1.83, 0.01),
+      );
     });
   });
 

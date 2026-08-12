@@ -129,10 +129,10 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
     );
     try {
       // Measured from the boundary itself rather than from
-      // DsPrintResponsive.captureWidth: on a screen narrower than the nominal
-      // capture width the SizedBox below is squeezed, and a pixel ratio derived
-      // from the nominal value would produce a capture that is not the paper
-      // width after all.
+      // DsPrintResponsive.captureWidth, which is null on a phone (meaning "as
+      // wide as the screen") and can be squeezed by a narrow parent on a
+      // tablet. Only the laid-out width tells the pixel ratio what it needs to
+      // know to land the capture on the paper width exactly.
       final box =
           _boundaryKey.currentContext?.findRenderObject() as RenderBox?;
       final size = box?.size ?? Size.zero;
@@ -155,6 +155,10 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
     // The document therefore never reflows between what the user previewed and
     // what gets printed, and on a tablet the preview becomes a receipt-width
     // column — which is exactly what comes out of the printer.
+    //
+    // The width is load-bearing for legibility, not just layout: the printer
+    // rescales whatever it is given to a fixed dot count, so the narrower this
+    // is, the larger the text prints. See DsPrintResponsive.captureWidth.
     return Center(
       child: SizedBox(
         width: DsPrintResponsive.captureWidth(context),
@@ -162,7 +166,10 @@ class _DsPrintWebSurfaceState extends State<DsPrintWebSurface> {
           key: _boundaryKey,
           child: ColoredBox(
             color: Colors.white,
-            child: SizedBox.expand(child: _webView),
+            child: Padding(
+              padding: DsPrintResponsive.capturePadding,
+              child: SizedBox.expand(child: _webView),
+            ),
           ),
         ),
       ),

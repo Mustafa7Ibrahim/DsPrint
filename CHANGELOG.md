@@ -36,8 +36,11 @@ Breaking, for direct users of the internal API: `ImageBase64Payload` now holds
 image. `InvoiceRenderPort.renderUrlToBase64Png` is now
 `renderUrlToPngSlices`, returning `List<String>`.
 `CaptureHeightResolver.resolvePixelRatio` is replaced by
-`resolveCapturePixelRatio`, and `DsPrintResponsive.captureContainerWidth` is
-removed. The public `DsPrint` API is unchanged.
+`resolveCapturePixelRatio`. `DsPrintResponsive.captureContainerWidth` is gone
+and `captureWidth` has taken over its value (`350`/null, not `500`/`390`) —
+there is now one width, the one the invoice is laid out at, because that alone
+determines both the pixel ratio and the printed text size. The public `DsPrint`
+API is unchanged.
 
 ## 0.1.0
 
