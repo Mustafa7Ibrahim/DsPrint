@@ -10,7 +10,6 @@ import '../renderer/surface_invoice_renderer.dart';
 import '../widgets/ds_print_app_bar.dart';
 import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_message_dialog.dart';
-import '../widgets/ds_print_screen_freeze.dart';
 import '../widgets/ds_print_web_surface.dart';
 
 class InvoicePreviewScreen extends StatelessWidget {
@@ -41,48 +40,15 @@ class _InvoicePreviewView extends StatefulWidget {
 class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
   DsPrintWebSurfaceHandle? _surface;
 
-  /// Freezes a still frame of this screen (as it looks *before* capture
-  /// starts resizing the WebView underneath) and covers the screen with it
-  /// while capture + print run — the same trick `OverlayInvoiceRenderer` uses
-  /// for the headless silent path, applied here so the resize itself is never
-  /// visible while the invoice (a motionless snapshot of it) still is.
-  Future<void> _handlePrint() async {
-    final cubit = context.read<InvoicePreviewCubit>();
-    if (cubit.state.isBusy) return;
+  void _handlePrint() {
     final surface = _surface;
-
-    final frozenScreen = await DsPrintScreenFreeze.capture();
-    if (!mounted) {
-      frozenScreen?.dispose();
-      return;
-    }
-    final overlay = Navigator.of(context, rootNavigator: true).overlay;
-    OverlayEntry? entry;
-    if (overlay != null) {
-      entry = OverlayEntry(
-        builder: (_) => DsPrintFrozenScreenCover(frame: frozenScreen),
-      );
-      overlay.insert(entry);
-    }
-
-    try {
-      await cubit.capture(
-        widget.url,
-        // Capture the invoice already on screen. Falling back to null (the
-        // injected headless renderer) only matters if the surface somehow
-        // hasn't reported in yet — it can't print a page it never rendered.
-        renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
-      );
-    } finally {
-      entry?.remove();
-      if (frozenScreen != null) {
-        // The entry unmounts on the *next* frame, so the RawImage could still
-        // be painting this image right now — disposing inline would tear it
-        // out from under that last frame.
-        WidgetsBinding.instance
-            .addPostFrameCallback((_) => frozenScreen.dispose());
-      }
-    }
+    context.read<InvoicePreviewCubit>().capture(
+          widget.url,
+          // Capture the invoice already on screen. Falling back to null (the
+          // injected headless renderer) only matters if the surface somehow
+          // hasn't reported in yet — it can't print a page it never rendered.
+          renderer: surface == null ? null : SurfaceInvoiceRenderer(surface),
+        );
   }
 
   void _handleState(BuildContext context, InvoicePreviewState state) {
@@ -117,11 +83,33 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
                 ),
                 if (state is InvoicePreviewLoading)
                   const DsPrintLoadingIndicator(),
+                if (state is InvoicePreviewCapturing)
+                  const _OpaquePrintingCover(),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// Covers the WebView while it resizes for capture, so the resize itself is
+/// never visible — only the standard loading spinner. Unlike
+/// [DsPrintFrozenScreenCover] (used by the silent overlay path elsewhere),
+/// there's no other screen to freeze here: this *is* the screen, so an opaque
+/// fill in the app's own background colour is enough.
+class _OpaquePrintingCover extends StatelessWidget {
+  const _OpaquePrintingCover();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: DsPrintTheme.of(context).background),
+        const DsPrintCapturingScrim(),
+      ],
     );
   }
 }
