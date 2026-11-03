@@ -21,8 +21,11 @@ dependencies:
   ds_print:
     git:
       url: https://github.com/Mustafa7Ibrahim/DsPrint.git
-      ref: v0.1.0
+      ref: v0.2.0
 ```
+
+Each release is a git tag. To move to a newer one, change `ref` and run
+`flutter pub get` — see [`doc/RELEASING.md`](doc/RELEASING.md).
 
 **That is the entire integration.** There is no setup call, no `init()`, no
 config object to build, no DI to register, no translation keys to add, and no
@@ -357,4 +360,5 @@ dependency_overrides:
     path: ../DsPrint
 ```
 
-Remove the override before committing.
+Remove the override before committing. When the change is ready for the host
+to pin, cut a release: [`doc/RELEASING.md`](doc/RELEASING.md).
