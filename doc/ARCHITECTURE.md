@@ -106,8 +106,8 @@ a spinner sit over the still-visible invoice.
 
 ```
 DsPrint.printUrlSilently(url)
-  └─ ResolvePrintDeviceUseCase → cached device, else discover-and-pair
-        └─ no printer → Left(NoDeviceFoundFailure), and nothing else runs
+  └─ ResolvePrintDeviceUseCase → the active printer the user chose
+        └─ none → Left(NoPrinterSelectedFailure), and nothing else runs
   └─ CaptureInvoiceUseCase → InvoiceCaptureRepository
         └─ OverlayInvoiceRenderer
               ├─ inserts an OverlayEntry: DsPrintWebSurface + DsPrintCapturingScrim
@@ -126,9 +126,14 @@ that fire this (order creation) can't know which do.
 
 `ResolvePrintDeviceUseCase` exists for that question. It was `AutoPrintUseCase`'s
 private `_resolveDevice`; extracting it lets a caller ask "is there a printer?"
-without printing. `AutoPrintUseCase` still resolves for itself — that is not a
-second scan, because resolution persists whatever it discovers, so the second
-pass is a cached read.
+without printing. `AutoPrintUseCase` still resolves for itself — a second cheap
+cached read.
+
+Resolution never scans. Pairing is manual: printers are added through the Add
+Printer sheet (`AddPrinterCubit` → `DiscoverPrintersUseCase(interfaceType:)` →
+`AddPrinterUseCase`), which saves them to the list in
+`SavedPrintersDataSource` and makes the chosen one active in
+`SelectedPrinterDataSource`.
 
 There is no screen to capture here, so one is created. The WebView **must be
 mounted on screen and painted at least once** — a `RepaintBoundary` snapshots a
@@ -269,6 +274,28 @@ trim algorithm has unit tests at all — none of it needs a `WebViewPlatform`.
 Channel names are duplicated between `ds_print_injection.dart` and
 `DsPrintPlugin.kt`. A mismatch is a silent runtime no-op, not a build error —
 keep them in sync.
+
+### The discovery protocol
+
+The `listen` argument is `PrinterInterfaceType.nativeName` — `"Usb"`, `"Lan"`
+or `"Bluetooth"` — and native scans only that interface; `null` scans USB + LAN.
+Native then sends, in order:
+
+| Event | Meaning |
+| --- | --- |
+| `"permission-requested"` | Android's permission dialog is up; Dart pauses its scan timeout |
+| `"permission-granted"` | The scan is starting; the timeout restarts |
+| `{id, interfaceType, name}` | A printer was found |
+| error `BluetoothUnavailable` / `NetworkUnavailable` / `UsbUnavailable` | That radio is off (`StarIO10ErrorCode` name) |
+| error `DISCOVERY_FAILED` | Any other SDK failure |
+| `"failed-permission-denied"` | The user refused the permission |
+| `"finished"` | Always last |
+
+Runtime permissions (`DiscoveryPermissions.kt`): `BLUETOOTH_CONNECT` for
+Bluetooth on API 31+; `ACCESS_LOCAL_NETWORK` for LAN only on API 37+ when the
+host targets 37 and declares it. The Star SDK's own manifest already declares
+`BLUETOOTH`, `BLUETOOTH_CONNECT` and `INTERNET`. These strings are duplicated in
+`printer_discovery_datasource.dart`, pinned by a test on the Dart side.
 
 ### The chunking protocol
 

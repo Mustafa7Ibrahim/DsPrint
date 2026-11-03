@@ -9,31 +9,17 @@ import 'package:ds_print/src/domain/entities/print_payload.dart';
 import 'package:ds_print/src/domain/entities/printer_device.dart';
 import 'package:ds_print/src/domain/entities/printer_interface_type.dart';
 import 'package:ds_print/src/domain/usecases/auto_print_usecase.dart';
-import 'package:ds_print/src/domain/usecases/clear_selected_printer_usecase.dart';
-import 'package:ds_print/src/domain/usecases/discover_printers_usecase.dart';
 import 'package:ds_print/src/domain/usecases/get_selected_printer_usecase.dart';
 import 'package:ds_print/src/domain/usecases/print_job_usecase.dart';
 import 'package:ds_print/src/domain/usecases/resolve_print_device_usecase.dart';
-import 'package:ds_print/src/domain/usecases/select_printer_usecase.dart';
 
 class MockGetSelectedPrinterUseCase extends Mock
     implements GetSelectedPrinterUseCase {}
-
-class MockSelectPrinterUseCase extends Mock implements SelectPrinterUseCase {}
-
-class MockClearSelectedPrinterUseCase extends Mock
-    implements ClearSelectedPrinterUseCase {}
-
-class MockDiscoverPrintersUseCase extends Mock
-    implements DiscoverPrintersUseCase {}
 
 class MockPrintJobUseCase extends Mock implements PrintJobUseCase {}
 
 void main() {
   late MockGetSelectedPrinterUseCase mockGetSelectedPrinter;
-  late MockSelectPrinterUseCase mockSelectPrinter;
-  late MockClearSelectedPrinterUseCase mockClearSelectedPrinter;
-  late MockDiscoverPrintersUseCase mockDiscoverPrinters;
   late MockPrintJobUseCase mockPrintJob;
   late AutoPrintUseCase useCase;
 
@@ -42,8 +28,6 @@ void main() {
       PrinterDevice(id: 'device-1', interfaceType: PrinterInterfaceType.usb);
   const invalidDevice =
       PrinterDevice(id: '', interfaceType: PrinterInterfaceType.usb);
-  const device2 =
-      PrinterDevice(id: 'device-2', interfaceType: PrinterInterfaceType.lan);
 
   setUpAll(() {
     // Fallback values for any()/captureAny() matchers - real instances,
@@ -59,21 +43,12 @@ void main() {
 
   setUp(() {
     mockGetSelectedPrinter = MockGetSelectedPrinterUseCase();
-    mockSelectPrinter = MockSelectPrinterUseCase();
-    mockClearSelectedPrinter = MockClearSelectedPrinterUseCase();
-    mockDiscoverPrinters = MockDiscoverPrintersUseCase();
     mockPrintJob = MockPrintJobUseCase();
-    // The resolver is real, not mocked, so every device-resolution
-    // expectation below still runs against the same three mocks it always
-    // did — the extraction into ResolvePrintDeviceUseCase moved that logic
-    // without changing it.
+    // The resolver is real, not mocked, so device resolution is exercised
+    // end to end against the selected-printer mock.
     useCase = AutoPrintUseCase(
-      resolveDevice: ResolvePrintDeviceUseCase(
-        getSelectedPrinter: mockGetSelectedPrinter,
-        selectPrinter: mockSelectPrinter,
-        discoverPrinters: mockDiscoverPrinters,
-      ),
-      clearSelectedPrinter: mockClearSelectedPrinter,
+      resolveDevice:
+          ResolvePrintDeviceUseCase(getSelectedPrinter: mockGetSelectedPrinter),
       printJob: mockPrintJob,
     );
   });
@@ -84,13 +59,10 @@ void main() {
 
     expect(result, const Left<DsPrintFailure, Unit>(EmptyPayloadFailure()));
     verifyNever(() => mockGetSelectedPrinter());
-    verifyNever(() => mockDiscoverPrinters());
-    verifyNever(() => mockSelectPrinter(any()));
     verifyNever(() => mockPrintJob(any()));
-    verifyNever(() => mockClearSelectedPrinter());
   });
 
-  test('a valid cached device prints to it - discovery never runs', () async {
+  test('prints to the selected printer', () async {
     when(() => mockGetSelectedPrinter())
         .thenAnswer((_) async => const Right(validDevice));
     when(() => mockPrintJob(any())).thenAnswer((_) async => const Right(unit));
@@ -98,86 +70,85 @@ void main() {
     final result = await useCase(payload);
 
     expect(result, const Right<DsPrintFailure, Unit>(unit));
-    verifyNever(() => mockDiscoverPrinters());
-    verify(() => mockPrintJob(any())).called(1);
-  });
-
-  test(
-      'no cached device discovers, persists the first device, and prints to it',
-      () async {
-    when(() => mockGetSelectedPrinter())
-        .thenAnswer((_) async => const Right(null));
-    when(() => mockDiscoverPrinters())
-        .thenAnswer((_) async => const Right([validDevice, device2]));
-    when(() => mockSelectPrinter(any()))
-        .thenAnswer((_) async => const Right(unit));
-    when(() => mockPrintJob(any())).thenAnswer((_) async => const Right(unit));
-
-    final result = await useCase(payload);
-
-    expect(result, const Right<DsPrintFailure, Unit>(unit));
-    verify(() => mockSelectPrinter(validDevice)).called(1);
     final captured = verify(() => mockPrintJob(captureAny())).captured;
     expect((captured.single as PrintJob).device, validDevice);
   });
 
-  test('an invalid cached device (empty id) also triggers discovery', () async {
-    when(() => mockGetSelectedPrinter())
-        .thenAnswer((_) async => const Right(invalidDevice));
-    when(() => mockDiscoverPrinters())
-        .thenAnswer((_) async => const Right([validDevice]));
-    when(() => mockSelectPrinter(any()))
-        .thenAnswer((_) async => const Right(unit));
-    when(() => mockPrintJob(any())).thenAnswer((_) async => const Right(unit));
+  test(
+      'each interface type is printed to as selected — a selected LAN or '
+      'Bluetooth printer is never swapped for another', () async {
+    for (final selected in const [
+      PrinterDevice(
+          id: '192.168.1.50', interfaceType: PrinterInterfaceType.lan),
+      PrinterDevice(
+          id: '00:11:62:AA:BB:CC',
+          interfaceType: PrinterInterfaceType.bluetooth),
+      PrinterDevice(id: 'usb-serial', interfaceType: PrinterInterfaceType.usb),
+    ]) {
+      when(() => mockGetSelectedPrinter())
+          .thenAnswer((_) async => Right(selected));
+      when(() => mockPrintJob(any()))
+          .thenAnswer((_) async => const Right(unit));
 
-    final result = await useCase(payload);
+      await useCase(payload);
 
-    expect(result, const Right<DsPrintFailure, Unit>(unit));
-    verify(() => mockDiscoverPrinters()).called(1);
-  });
-
-  test('discovery returns empty -> Left(NoDeviceFoundFailure)', () async {
-    when(() => mockGetSelectedPrinter())
-        .thenAnswer((_) async => const Right(null));
-    when(() => mockDiscoverPrinters())
-        .thenAnswer((_) async => const Right(<PrinterDevice>[]));
-
-    final result = await useCase(payload);
-
-    expect(result, const Left<DsPrintFailure, Unit>(NoDeviceFoundFailure()));
-    verifyNever(() => mockSelectPrinter(any()));
-    verifyNever(() => mockPrintJob(any()));
+      final captured = verify(() => mockPrintJob(captureAny())).captured;
+      expect((captured.single as PrintJob).device, selected);
+    }
   });
 
   test(
-      'print returns Left(NativePrintFailure) -> ClearSelectedPrinterUseCase is called, Left propagates',
-      () async {
+      'no selected printer -> Left(NoPrinterSelectedFailure) and nothing is '
+      'printed (pairing is manual: there is no discovery fallback)', () async {
     when(() => mockGetSelectedPrinter())
-        .thenAnswer((_) async => const Right(validDevice));
-    when(() => mockPrintJob(any())).thenAnswer(
-        (_) async => const Left(NativePrintFailure('native crash')));
-    when(() => mockClearSelectedPrinter())
-        .thenAnswer((_) async => const Right(unit));
-
-    final result = await useCase(payload);
-
-    expect(result,
-        const Left<DsPrintFailure, Unit>(NativePrintFailure('native crash')));
-    verify(() => mockClearSelectedPrinter()).called(1);
-  });
-
-  test('print returns a different failure -> the cache is NOT cleared',
-      () async {
-    when(() => mockGetSelectedPrinter())
-        .thenAnswer((_) async => const Right(validDevice));
-    when(() => mockPrintJob(any()))
-        .thenAnswer((_) async => const Left(NoPrinterSelectedFailure()));
+        .thenAnswer((_) async => const Right(null));
 
     final result = await useCase(payload);
 
     expect(
         result, const Left<DsPrintFailure, Unit>(NoPrinterSelectedFailure()));
-    verifyNever(() => mockClearSelectedPrinter());
+    verifyNever(() => mockPrintJob(any()));
+  });
+
+  test('an invalid selected printer (empty id) is treated as none', () async {
+    when(() => mockGetSelectedPrinter())
+        .thenAnswer((_) async => const Right(invalidDevice));
+
+    final result = await useCase(payload);
+
+    expect(
+        result, const Left<DsPrintFailure, Unit>(NoPrinterSelectedFailure()));
+    verifyNever(() => mockPrintJob(any()));
+  });
+
+  test('a failed read of the selection propagates as-is', () async {
+    when(() => mockGetSelectedPrinter())
+        .thenAnswer((_) async => const Left(StorageFailure('read failed')));
+
+    final result = await useCase(payload);
+
+    expect(result,
+        const Left<DsPrintFailure, Unit>(StorageFailure('read failed')));
+    verifyNever(() => mockPrintJob(any()));
+  });
+
+  test('a native print failure propagates, and the selection is kept',
+      () async {
+    when(() => mockGetSelectedPrinter())
+        .thenAnswer((_) async => const Right(validDevice));
+    when(() => mockPrintJob(any())).thenAnswer(
+        (_) async => const Left(NativePrintFailure('native crash')));
+
+    final result = await useCase(payload);
+
+    expect(result,
+        const Left<DsPrintFailure, Unit>(NativePrintFailure('native crash')));
+    // AutoPrintUseCase has no way to clear the selection any more; the next
+    // print still resolves to the same printer.
+    when(() => mockPrintJob(any())).thenAnswer((_) async => const Right(unit));
+    expect(await useCase(payload), const Right<DsPrintFailure, Unit>(unit));
+    final captured = verify(() => mockPrintJob(captureAny())).captured;
+    expect((captured.last as PrintJob).device, validDevice);
   });
 
   test('copies is threaded into the PrintJob', () async {

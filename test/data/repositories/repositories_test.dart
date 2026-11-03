@@ -43,17 +43,22 @@ class FakePrinterDiscoveryDataSource implements PrinterDiscoveryDataSource {
   final Object? discoverOnceError;
   final Object? watchError;
 
+  /// Every interface type a scan was requested for, in call order.
+  final List<PrinterInterfaceType?> requestedTypes = [];
+
   @override
-  Stream<PrinterDeviceModel> watch(PrinterInterfaceType interfaceType) {
+  Stream<PrinterDeviceModel> watch({PrinterInterfaceType? interfaceType}) {
+    requestedTypes.add(interfaceType);
     if (watchError != null) return Stream.error(watchError!);
     return Stream.fromIterable(devices);
   }
 
   @override
-  Future<List<PrinterDeviceModel>> discoverOnce(
-    PrinterInterfaceType interfaceType, {
+  Future<List<PrinterDeviceModel>> discoverOnce({
+    PrinterInterfaceType? interfaceType,
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    requestedTypes.add(interfaceType);
     if (discoverOnceError != null) throw discoverOnceError!;
     return devices;
   }
@@ -132,8 +137,8 @@ void main() {
           expect(payload.slices, ['aa==', 'bb==', 'cc==']);
           // The wire format the native side splits back apart.
           expect(payload.raw, 'aa==\nbb==\ncc==');
-          expect(payload.raw.split(ImageBase64Payload.separator),
-              payload.slices);
+          expect(
+              payload.raw.split(ImageBase64Payload.separator), payload.slices);
         },
       );
     });
@@ -218,6 +223,12 @@ void main() {
         const CaptureException('d'): const CaptureFailure('d'),
         const NativePrintException('d'): const NativePrintFailure('d'),
         const StorageException('d'): const StorageFailure('d'),
+        const PermissionDeniedException(): const PermissionDeniedFailure(),
+        const InterfaceUnavailableException(PrinterInterfaceType.bluetooth):
+            const InterfaceUnavailableFailure(PrinterInterfaceType.bluetooth),
+        const InterfaceUnavailableException(PrinterInterfaceType.lan):
+            const InterfaceUnavailableFailure(PrinterInterfaceType.lan),
+        const DiscoveryException('d'): const DiscoveryFailure('d'),
       };
 
       for (final entry in cases.entries) {
@@ -237,7 +248,27 @@ void main() {
 
       final result = await repo.discoverOnce();
 
-      expect(result.isLeft(), isTrue);
+      result.fold((failure) => expect(failure, isA<DiscoveryFailure>()),
+          (_) => fail('expected Left'));
+    });
+
+    test(
+        'forwards the requested interface type to the datasource, and null '
+        'when none is given', () async {
+      final dataSource = FakePrinterDiscoveryDataSource();
+      final repo = PrinterDiscoveryRepositoryImpl(dataSource);
+
+      await repo.discoverOnce(interfaceType: PrinterInterfaceType.lan);
+      await repo.discoverOnce(interfaceType: PrinterInterfaceType.bluetooth);
+      await repo.discoverOnce(interfaceType: PrinterInterfaceType.usb);
+      await repo.discoverOnce();
+
+      expect(dataSource.requestedTypes, [
+        PrinterInterfaceType.lan,
+        PrinterInterfaceType.bluetooth,
+        PrinterInterfaceType.usb,
+        null,
+      ]);
     });
   });
 
@@ -267,6 +298,17 @@ void main() {
       expect(results, [
         const Left<DsPrintFailure, PrinterDevice>(UnsupportedPlatformFailure())
       ]);
+    });
+
+    test('forwards the requested interface type to the datasource', () async {
+      final dataSource = FakePrinterDiscoveryDataSource();
+      final repo = PrinterDiscoveryRepositoryImpl(dataSource);
+
+      await repo
+          .watchDiscoveredDevices(interfaceType: PrinterInterfaceType.bluetooth)
+          .toList();
+
+      expect(dataSource.requestedTypes, [PrinterInterfaceType.bluetooth]);
     });
   });
 

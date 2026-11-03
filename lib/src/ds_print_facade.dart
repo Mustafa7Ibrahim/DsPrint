@@ -9,12 +9,16 @@ import 'core/di/ds_print_injection.dart';
 import 'core/error/ds_print_failure.dart';
 import 'domain/entities/print_payload.dart';
 import 'domain/entities/printer_device.dart';
+import 'domain/entities/printer_interface_type.dart';
 import 'domain/usecases/auto_print_usecase.dart';
 import 'domain/usecases/capture_invoice_usecase.dart';
 import 'domain/usecases/discover_printers_usecase.dart';
+import 'domain/usecases/get_saved_printers_usecase.dart';
+import 'domain/usecases/get_selected_printer_usecase.dart';
 import 'domain/usecases/resolve_print_device_usecase.dart';
 import 'presentation/screens/invoice_preview_screen.dart';
 import 'presentation/screens/printer_picker_screen.dart';
+import 'presentation/widgets/ds_print_add_printer_sheet.dart';
 
 /// Public entry point for ds_print. Zero configuration required: every
 /// method below either resolves through [dsPrintResolve] itself or pushes a
@@ -57,10 +61,11 @@ class DsPrint {
   }
 
   /// Captures [url] headlessly (no visible screen) and prints it straight to
-  /// the cached, or else first-discovered-and-cached, device.
+  /// the printer the user selected.
   ///
-  /// Returns `Left(NoDeviceFoundFailure)` and does nothing at all when there
-  /// is no printer — no render, no overlay, no scrim. Callers that print
+  /// Returns `Left(NoPrinterSelectedFailure)` and does nothing at all when no
+  /// printer is selected — no render, no overlay, no scrim, and no discovery
+  /// scan: pairing is manual (see [addPrinter]). Callers that print
   /// automatically (order creation) can therefore fire this unconditionally:
   /// a store without a printer simply gets nothing, silently.
   static Future<Either<DsPrintFailure, Unit>> printUrlSilently(
@@ -72,11 +77,10 @@ class DsPrint {
     // silent no-op is indistinguishable from a bad url.
     log('DsPrint.printUrlSilently: url=$url copies=$copies');
     // Find the printer *first*. Rendering an invoice takes a WebView, a
-    // couple of seconds and a blocking scrim, and discovery costs up to ten
-    // seconds more — so the original capture-then-look-for-a-device order
-    // made a store with no printer freeze for both, then print nothing.
-    // Resolution is silent and persists what it finds, so the resolve inside
-    // AutoPrintUseCase below is a cached read rather than a second scan.
+    // couple of seconds and a blocking scrim — so the original
+    // capture-then-look-for-a-device order made a store with no printer
+    // freeze, then print nothing. The resolve inside AutoPrintUseCase below
+    // is the same cheap cached read.
     final deviceResult = await dsPrintResolve<ResolvePrintDeviceUseCase>()();
     return deviceResult.fold(
       (failure) async => Left(failure),
@@ -92,20 +96,29 @@ class DsPrint {
     );
   }
 
+  /// Prints to the selected printer; `Left(NoPrinterSelectedFailure)` when
+  /// there is none.
   static Future<Either<DsPrintFailure, Unit>> printBase64(String base64,
       {int copies = 1}) {
-    return dsPrintResolve<AutoPrintUseCase>()(
-        ImageBase64Payload.single(base64),
+    return dsPrintResolve<AutoPrintUseCase>()(ImageBase64Payload.single(base64),
         copies: copies);
   }
 
+  /// Prints to the selected printer; `Left(NoPrinterSelectedFailure)` when
+  /// there is none.
   static Future<Either<DsPrintFailure, Unit>> printHtml(String html) {
     return dsPrintResolve<AutoPrintUseCase>()(HtmlPayload(html));
   }
 
-  /// Pushes the device picker with no payload attached — pick/pair a
-  /// printer without printing anything.
-  static Future<void> selectDevice({BuildContext? context}) async {
+  /// Pushes the printers screen with no payload attached — add printers and
+  /// choose the active one without printing anything. [showBluetooth] /
+  /// [showLan] hide that option in Add Printer; null falls back to
+  /// [DsPrintConfig].
+  static Future<void> selectDevice({
+    BuildContext? context,
+    bool? showBluetooth,
+    bool? showLan,
+  }) async {
     final resolvedContext = RootContextResolver.resolve(explicit: context);
     if (resolvedContext == null) {
       throw StateError(
@@ -116,10 +129,58 @@ class DsPrint {
     await Navigator.of(
       resolvedContext,
       rootNavigator: true,
-    ).push(MaterialPageRoute(builder: (_) => const PrinterPickerScreen()));
+    ).push(MaterialPageRoute(
+        builder: (_) => PrinterPickerScreen(
+              showBluetooth: showBluetooth,
+              showLan: showLan,
+            )));
   }
 
-  static Future<Either<DsPrintFailure, List<PrinterDevice>>> discover() {
-    return dsPrintResolve<DiscoverPrintersUseCase>()();
+  /// Opens the Add Printer sheet over whatever is on screen: the user picks
+  /// USB / LAN / Bluetooth, scans that type (or types a LAN IP address) and
+  /// taps a printer.
+  ///
+  /// Completes with the added printer — already saved and made the active
+  /// printer every print call uses — or `null` if the user closed the sheet.
+  /// [DsPrintAddPrinterButton] is this, as a ready-made button.
+  ///
+  /// [showBluetooth] / [showLan] hide that option; null falls back to
+  /// [DsPrintConfig], and then to showing it.
+  static Future<PrinterDevice?> addPrinter({
+    BuildContext? context,
+    bool? showBluetooth,
+    bool? showLan,
+  }) {
+    final resolvedContext = RootContextResolver.resolve(explicit: context);
+    if (resolvedContext == null) {
+      throw StateError(
+        'DsPrint.addPrinter: could not resolve a BuildContext — pass '
+        '`context:` explicitly, or call DsPrint.configure with a navigatorKey.',
+      );
+    }
+    return DsPrintAddPrinterSheet.show(
+      resolvedContext,
+      showBluetooth: showBluetooth,
+      showLan: showLan,
+    );
+  }
+
+  /// Every printer the user has added, in the order they were added.
+  static Future<Either<DsPrintFailure, List<PrinterDevice>>> savedPrinters() {
+    return dsPrintResolve<GetSavedPrintersUseCase>()();
+  }
+
+  /// The printer every print call goes to, or `null` when none is selected.
+  static Future<Either<DsPrintFailure, PrinterDevice?>> selectedPrinter() {
+    return dsPrintResolve<GetSelectedPrinterUseCase>()();
+  }
+
+  /// Scans for printers without saving anything. [interfaceType] restricts
+  /// the scan to one connection type; `null` scans USB and LAN.
+  static Future<Either<DsPrintFailure, List<PrinterDevice>>> discover({
+    PrinterInterfaceType? interfaceType,
+  }) {
+    return dsPrintResolve<DiscoverPrintersUseCase>()(
+        interfaceType: interfaceType);
   }
 }

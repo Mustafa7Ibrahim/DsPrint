@@ -8,39 +8,61 @@ import '../../domain/entities/print_payload.dart';
 import '../../domain/entities/printer_device.dart';
 import '../cubit/print_job_cubit.dart';
 import '../cubit/print_job_state.dart';
-import '../cubit/printer_discovery_cubit.dart';
-import '../cubit/printer_discovery_state.dart';
+import '../cubit/saved_printers_cubit.dart';
+import '../cubit/saved_printers_state.dart';
+import '../widgets/ds_print_add_printer_button.dart';
 import '../widgets/ds_print_app_bar.dart';
 import '../widgets/ds_print_loading.dart';
 import '../widgets/ds_print_message_dialog.dart';
 import '../widgets/printer_device_tile.dart';
 
-/// `payload == null` means "pick/pair a device only" (used from
-/// [DsPrint.selectDevice]); a non-null payload additionally prints it to
-/// whichever device is tapped. This collapses the host's three-valued
-/// `EnumPrinterScreenMode` into one nullable field — the html/base64
-/// distinction already lives on the [PrintPayload] subtype.
+/// The user's printers: the ones they added, with the active one marked.
+/// Opening it never scans — new printers come in only through the Add
+/// Printer button.
+///
+/// `payload == null` means "manage printers only" (used from
+/// [DsPrint.selectDevice]): tapping a printer just makes it the active one.
+/// A non-null payload additionally prints it — to the printer tapped, or to a
+/// printer the user adds right here — and pops on success. This collapses the
+/// host's three-valued `EnumPrinterScreenMode` into one nullable field — the
+/// html/base64 distinction already lives on the [PrintPayload] subtype.
 class PrinterPickerScreen extends StatelessWidget {
   final PrintPayload? payload;
 
-  const PrinterPickerScreen({super.key, this.payload});
+  /// Whether Add Printer offers Bluetooth / LAN. Null falls back to
+  /// `DsPrintConfig`, and then to showing them.
+  final bool? showBluetooth;
+  final bool? showLan;
+
+  const PrinterPickerScreen({
+    super.key,
+    this.payload,
+    this.showBluetooth,
+    this.showLan,
+  });
 
   @override
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (_) => dsPrintResolve<PrinterDiscoveryCubit>()),
+        BlocProvider(create: (_) => dsPrintResolve<SavedPrintersCubit>()),
         BlocProvider(create: (_) => dsPrintResolve<PrintJobCubit>()),
       ],
-      child: _PrinterPickerView(payload: payload),
+      child: _PrinterPickerView(
+        payload: payload,
+        showBluetooth: showBluetooth,
+        showLan: showLan,
+      ),
     );
   }
 }
 
 class _PrinterPickerView extends StatefulWidget {
   final PrintPayload? payload;
+  final bool? showBluetooth;
+  final bool? showLan;
 
-  const _PrinterPickerView({this.payload});
+  const _PrinterPickerView({this.payload, this.showBluetooth, this.showLan});
 
   @override
   State<_PrinterPickerView> createState() => _PrinterPickerViewState();
@@ -50,23 +72,57 @@ class _PrinterPickerViewState extends State<_PrinterPickerView> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      context.read<PrinterDiscoveryCubit>().discover();
-    });
+    context.read<SavedPrintersCubit>().load();
   }
 
   void _handleTap(PrinterDevice device) {
-    context.read<PrinterDiscoveryCubit>().select(device);
+    context.read<SavedPrintersCubit>().select(device);
+    _printIfRequested(device);
+  }
+
+  /// The sheet has already saved [device] and made it the active printer.
+  void _handleAdded(PrinterDevice device) {
+    context.read<SavedPrintersCubit>().onPrinterAdded(device);
+    _printIfRequested(device);
+  }
+
+  void _printIfRequested(PrinterDevice device) {
     final payload = widget.payload;
     if (payload != null) {
       context.read<PrintJobCubit>().printTo(device, payload);
     }
   }
 
+  Future<bool> _confirmRemove() async {
+    final theme = DsPrintTheme.of(context);
+    final strings = DsPrintStrings.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: theme.surface,
+        content: Text(strings.removePrinterQuestion, style: theme.bodyStyle),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(strings.cancel,
+                style: theme.actionStyle.copyWith(color: theme.primary)),
+          ),
+          TextButton(
+            key: const Key('ds_print_confirm_remove'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(strings.remove,
+                style: theme.actionStyle.copyWith(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = DsPrintStrings.of(context);
+    final theme = DsPrintTheme.of(context);
     return BlocListener<PrintJobCubit, PrintJobState>(
       listener: (context, state) {
         if (state is PrintJobCompleted) {
@@ -76,77 +132,95 @@ class _PrinterPickerViewState extends State<_PrinterPickerView> {
         }
       },
       child: Scaffold(
-        backgroundColor: DsPrintTheme.of(context).background,
+        backgroundColor: theme.background,
         appBar: DsPrintAppBar(title: strings.printers),
-        body: BlocBuilder<PrinterDiscoveryCubit, PrinterDiscoveryState>(
-          builder: (context, state) => switch (state) {
-            PrinterDiscoveryInitial() ||
-            PrinterDiscoveryLoading() =>
-              const DsPrintLoadingIndicator(),
-            PrinterDiscoverySuccess(devices: final devices)
-                when devices.isEmpty =>
-              const Center(
-                child: AddPrinterButton(),
-              ),
-            PrinterDiscoverySuccess(
-              devices: final devices,
-              selected: final selected
-            ) =>
-              ListView.separated(
-                padding: const EdgeInsets.all(25),
-                itemCount: devices.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 16),
-                itemBuilder: (context, index) {
-                  final device = devices[index];
-                  return PrinterDeviceTile(
-                    device: device,
-                    isSelected: device == selected,
-                    onTap: () => _handleTap(device),
-                  );
-                },
-              ),
-            PrinterDiscoveryFailure(failure: final failure) => Center(
-                child: Text(strings.forFailure(failure),
-                    style: DsPrintTheme.of(context).bodyStyle),
-              ),
-          },
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: DsPrintAddPrinterButton(
+                      onPrinterAdded: _handleAdded,
+                      showBluetooth: widget.showBluetooth,
+                      showLan: widget.showLan,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: BlocBuilder<SavedPrintersCubit, SavedPrintersState>(
+                    builder: (context, state) => switch (state) {
+                      SavedPrintersLoading() => const DsPrintLoadingIndicator(),
+                      SavedPrintersLoaded(printers: final printers)
+                          when printers.isEmpty =>
+                        Center(
+                          child: Text(strings.noPrintersAdded,
+                              style: theme.bodyStyle),
+                        ),
+                      SavedPrintersLoaded(
+                        printers: final printers,
+                        selected: final selected
+                      ) =>
+                        ListView.separated(
+                          padding: const EdgeInsets.all(24),
+                          itemCount: printers.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 16),
+                          itemBuilder: (context, index) {
+                            final device = printers[index];
+                            return Dismissible(
+                              key: ValueKey(
+                                  '${device.interfaceType.name}:${device.id}'),
+                              direction: DismissDirection.endToStart,
+                              confirmDismiss: (_) => _confirmRemove(),
+                              onDismissed: (_) => context
+                                  .read<SavedPrintersCubit>()
+                                  .remove(device),
+                              background: const _RemoveBackground(),
+                              child: PrinterDeviceTile(
+                                device: device,
+                                isSelected: device == selected,
+                                onTap: () => _handleTap(device),
+                              ),
+                            );
+                          },
+                        ),
+                      SavedPrintersFailure(failure: final failure) => Center(
+                          child: Text(strings.forFailure(failure),
+                              style: theme.bodyStyle),
+                        ),
+                    },
+                  ),
+                ),
+              ],
+            ),
+            BlocBuilder<PrintJobCubit, PrintJobState>(
+              builder: (context, state) => state is PrintJobInProgress
+                  ? const Positioned.fill(child: DsPrintCapturingScrim())
+                  : const SizedBox.shrink(),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class AddPrinterButton extends StatelessWidget {
-  const AddPrinterButton({super.key});
-
-  Future<void> _handlePressed(BuildContext context) async {
-    final cubit = context.read<PrinterDiscoveryCubit>();
-    await cubit.discover();
-    if (!context.mounted) return;
-    final state = cubit.state;
-    final stillEmpty =
-        state is PrinterDiscoverySuccess && state.devices.isEmpty;
-    if (stillEmpty) {
-      await DsPrintMessageDialog.show(
-          context, DsPrintStrings.of(context).noPrinterConnected);
-    }
-  }
+class _RemoveBackground extends StatelessWidget {
+  const _RemoveBackground();
 
   @override
   Widget build(BuildContext context) {
-    final theme = DsPrintTheme.of(context);
-    return ElevatedButton(
-      // Styled from the resolved theme rather than left to the host's
-      // `elevatedButtonTheme`, so the pill matches the flavor colour in any
-      // host — including one that never registered a button theme.
-      style: ElevatedButton.styleFrom(
-        backgroundColor: theme.primary,
-        foregroundColor: theme.appBarForeground,
-        minimumSize: const Size(220, 48),
-        shape: const StadiumBorder(),
+    return Container(
+      alignment: AlignmentDirectional.centerEnd,
+      padding: const EdgeInsetsDirectional.only(end: 24),
+      decoration: BoxDecoration(
+        color: Colors.red.shade400,
+        borderRadius: BorderRadius.circular(16),
       ),
-      onPressed: () => _handlePressed(context),
-      child: Text(DsPrintStrings.of(context).addPrinter),
+      child: const Icon(Icons.delete_outline, color: Colors.white),
     );
   }
 }

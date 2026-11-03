@@ -1,19 +1,40 @@
 package com.dsprint.ds_print
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import androidx.core.app.ActivityCompat
 import com.dsprint.ds_print.channel.DsPrintEventSink
 import com.dsprint.ds_print.channel.PrintChannelRequest
 import com.dsprint.ds_print.channel.PrintRequestAssembler
+import com.dsprint.ds_print.discovery.DiscoveryPermissions
+import com.dsprint.ds_print.discovery.discoveryInterfacesFor
 import com.dsprint.ds_print.dispatch.PrintDispatcher
 import com.dsprint.ds_print.star.StarPrinterGateway
+import com.starmicronics.stario10.InterfaceType
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
 
 private const val DISCOVERY_EVENT_CHANNEL = "com.printer.discover/event"
 private const val PRINT_METHOD_CHANNEL = "com.printer.html/sendToNative"
 private const val PRINT_RESULT_EVENT_CHANNEL = "com.printer.html/listenFromNative"
 private const val METHOD_FROM_FLUTTER = "fromFlutter"
+
+// Discovery channel events beyond device maps. Must match the constants in
+// `printer_discovery_datasource.dart`.
+private const val EVENT_FINISHED = "finished"
+private const val EVENT_PERMISSION_REQUESTED = "permission-requested"
+private const val EVENT_PERMISSION_GRANTED = "permission-granted"
+private const val EVENT_PERMISSION_DENIED = "failed-permission-denied"
+
+// Arbitrary, but unique within this plugin: the host app's own permission
+// requests arrive at the same listener chain and must be left alone.
+private const val DISCOVERY_PERMISSION_REQUEST_CODE = 0x4453
 
 /**
  * Registers the three ds_print platform channels and wires them to the
@@ -24,9 +45,22 @@ private const val METHOD_FROM_FLUTTER = "fromFlutter"
  * calls. Compare to the legacy `MainActivity`, which did all of the above
  * plus discovery wiring in one 335-line Activity.
  */
-class DsPrintPlugin : FlutterPlugin {
+class DsPrintPlugin : FlutterPlugin, ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener {
 
     private lateinit var applicationContext: Context
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Needed only to show Android's runtime-permission dialog. */
+    private var activityBinding: ActivityPluginBinding? = null
+
+    /** A scan waiting on the user's answer to the permission dialog. */
+    private var pendingDiscovery: PendingDiscovery? = null
+
+    private class PendingDiscovery(
+        val events: EventChannel.EventSink,
+        val interfaces: List<InterfaceType>,
+    )
     private val requestAssembler = PrintRequestAssembler()
     private val starPrinterGateway = StarPrinterGateway()
     private var printDispatcher: PrintDispatcher? = null
@@ -59,6 +93,45 @@ class DsPrintPlugin : FlutterPlugin {
         printResultEventChannel = null
         printDispatcher = null
         DsPrintEventSink.clear()
+    }
+
+    //---------------------------------------------------------------------- activity
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activityBinding = binding
+        binding.addRequestPermissionsResultListener(this)
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() = onDetachedFromActivity()
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) =
+        onAttachedToActivity(binding)
+
+    override fun onDetachedFromActivity() {
+        activityBinding?.removeRequestPermissionsResultListener(this)
+        activityBinding = null
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ): Boolean {
+        if (requestCode != DISCOVERY_PERMISSION_REQUEST_CODE) return false
+        val pending = pendingDiscovery ?: return true
+        pendingDiscovery = null
+        // An empty result means the request was interrupted — treat it as a
+        // denial rather than scanning without the permission.
+        val granted = grantResults.isNotEmpty() &&
+            grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        if (granted) {
+            emit(pending.events, EVENT_PERMISSION_GRANTED)
+            startDiscovery(pending.events, pending.interfaces)
+        } else {
+            emit(pending.events, EVENT_PERMISSION_DENIED)
+            emit(pending.events, EVENT_FINISHED)
+        }
+        return true
     }
 
     //---------------------------------------------------------------------- print channel
@@ -101,26 +174,70 @@ class DsPrintPlugin : FlutterPlugin {
     //---------------------------------------------------------------------- discovery channel
 
     private val discoveryStreamHandler = object : EventChannel.StreamHandler {
+        /**
+         * [arguments] is the Dart side's `PrinterInterfaceType.nativeName`
+         * (`"Usb"` / `"Lan"` / `"Bluetooth"`), or null for the legacy
+         * USB + LAN scan.
+         */
         override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-            starPrinterGateway.discover(
-                context = applicationContext,
-                onPrinterFound = { printer ->
-                    events?.success(
-                        mapOf(
-                            "name" to printer.name,
-                            "id" to printer.id,
-                            "interfaceType" to printer.interfaceType,
-                        )
-                    )
-                },
-                onDiscoveryFinished = {
-                    events?.success("finished")
-                },
+            if (events == null) return
+            val interfaces = discoveryInterfacesFor(arguments as? String)
+            val missing = DiscoveryPermissions.missing(applicationContext, interfaces)
+            if (missing.isEmpty()) {
+                startDiscovery(events, interfaces)
+                return
+            }
+            val activity = activityBinding?.activity
+            if (activity == null) {
+                emit(events, EVENT_PERMISSION_DENIED)
+                emit(events, EVENT_FINISHED)
+                return
+            }
+            pendingDiscovery = PendingDiscovery(events, interfaces)
+            // Lets Dart suspend its scan timeout while the dialog is up.
+            emit(events, EVENT_PERMISSION_REQUESTED)
+            ActivityCompat.requestPermissions(
+                activity,
+                missing.toTypedArray(),
+                DISCOVERY_PERMISSION_REQUEST_CODE,
             )
         }
 
         override fun onCancel(arguments: Any?) {
-            // Matches legacy behaviour: no explicit stopDiscovery() here.
+            pendingDiscovery = null
+            starPrinterGateway.stopDiscovery()
         }
+    }
+
+    private fun startDiscovery(events: EventChannel.EventSink, interfaces: List<InterfaceType>) {
+        starPrinterGateway.discover(
+            context = applicationContext,
+            interfaces = interfaces,
+            onPrinterFound = { printer ->
+                emit(
+                    events,
+                    mapOf(
+                        "name" to printer.name,
+                        "id" to printer.id,
+                        "interfaceType" to printer.interfaceType,
+                    )
+                )
+            },
+            onDiscoveryFinished = { emit(events, EVENT_FINISHED) },
+            onError = { code, message ->
+                mainHandler.post { events.error(code, message, null) }
+                emit(events, EVENT_FINISHED)
+            },
+        )
+    }
+
+    /**
+     * EventSink calls are `@UiThread`-only and the Star SDK doesn't document
+     * which thread its callbacks run on, so every discovery event is posted
+     * to the main looper — same as [DsPrintEventSink] does for print results.
+     * A sink whose stream Dart already cancelled ignores the call.
+     */
+    private fun emit(events: EventChannel.EventSink, event: Any?) {
+        mainHandler.post { events.success(event) }
     }
 }

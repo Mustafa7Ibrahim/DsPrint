@@ -10,13 +10,18 @@ import 'package:ds_print/src/domain/entities/print_payload.dart';
 import 'package:ds_print/src/domain/entities/printer_device.dart';
 import 'package:ds_print/src/domain/entities/printer_interface_type.dart';
 import 'package:ds_print/src/domain/usecases/auto_print_usecase.dart';
+import 'package:ds_print/src/domain/usecases/get_selected_printer_usecase.dart';
 import 'package:ds_print/src/domain/usecases/print_job_usecase.dart';
+import 'package:ds_print/src/domain/usecases/resolve_print_device_usecase.dart';
 import 'package:ds_print/src/presentation/cubit/print_job_cubit.dart';
 import 'package:ds_print/src/presentation/cubit/print_job_state.dart';
 
 class MockAutoPrintUseCase extends Mock implements AutoPrintUseCase {}
 
 class MockPrintJobUseCase extends Mock implements PrintJobUseCase {}
+
+class MockGetSelectedPrinterUseCase extends Mock
+    implements GetSelectedPrinterUseCase {}
 
 void main() {
   late MockAutoPrintUseCase mockAutoPrint;
@@ -102,4 +107,53 @@ void main() {
       PrintJobFailure(NoPrinterSelectedFailure()),
     ],
   );
+
+  // InvoicePreviewScreen's Print button calls autoPrint and opens the picker
+  // only on NoPrinterSelectedFailure. These pin both sides of that signal
+  // with the real AutoPrintUseCase / ResolvePrintDeviceUseCase.
+  group('autoPrint through the real use cases (the preview Print button)', () {
+    late MockGetSelectedPrinterUseCase getSelected;
+
+    setUp(() => getSelected = MockGetSelectedPrinterUseCase());
+
+    PrintJobCubit buildRealCubit() => PrintJobCubit(
+          autoPrint: AutoPrintUseCase(
+            resolveDevice:
+                ResolvePrintDeviceUseCase(getSelectedPrinter: getSelected),
+            printJob: mockPrintJob,
+          ),
+          printJob: mockPrintJob,
+        );
+
+    blocTest<PrintJobCubit, PrintJobState>(
+      'a selected printer is printed to directly — no picker',
+      setUp: () {
+        when(() => getSelected()).thenAnswer((_) async => const Right(device));
+        when(() => mockPrintJob(any()))
+            .thenAnswer((_) async => const Right(unit));
+      },
+      build: buildRealCubit,
+      act: (cubit) => cubit.autoPrint(payload),
+      expect: () => const [PrintJobInProgress(), PrintJobCompleted()],
+      verify: (_) {
+        final job = verify(() => mockPrintJob(captureAny())).captured.single
+            as PrintJob;
+        expect(job.device, device);
+      },
+    );
+
+    blocTest<PrintJobCubit, PrintJobState>(
+      'nothing selected fails with NoPrinterSelectedFailure — the signal '
+      'that opens the picker',
+      setUp: () =>
+          when(() => getSelected()).thenAnswer((_) async => const Right(null)),
+      build: buildRealCubit,
+      act: (cubit) => cubit.autoPrint(payload),
+      expect: () => const [
+        PrintJobInProgress(),
+        PrintJobFailure(NoPrinterSelectedFailure()),
+      ],
+      verify: (_) => verifyNever(() => mockPrintJob(any())),
+    );
+  });
 }

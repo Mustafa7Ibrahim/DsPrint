@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../domain/entities/printer_interface_type.dart';
+
 /// All failures produced by the ds_print domain layer.
 ///
 /// `debugMessage` is developer-facing (English, for logs) — user-facing copy
@@ -103,4 +105,45 @@ class NotConfiguredFailure extends DsPrintFailure {
 
   @override
   List<Object?> get props => [reason];
+}
+
+/// The user denied the "Nearby devices" permission discovery needs —
+/// `BLUETOOTH_CONNECT` for Bluetooth, `ACCESS_LOCAL_NETWORK` for LAN on
+/// Android 17+.
+class PermissionDeniedFailure extends DsPrintFailure {
+  const PermissionDeniedFailure();
+
+  @override
+  String get debugMessage =>
+      'ds_print: a runtime permission needed for discovery was denied';
+
+  @override
+  List<Object?> get props => [];
+}
+
+/// Bluetooth is off, there is no network, or USB host mode is unavailable.
+class InterfaceUnavailableFailure extends DsPrintFailure {
+  final PrinterInterfaceType interfaceType;
+
+  const InterfaceUnavailableFailure(this.interfaceType);
+
+  @override
+  String get debugMessage =>
+      'ds_print: ${interfaceType.nativeName} is unavailable on this device';
+
+  @override
+  List<Object?> get props => [interfaceType];
+}
+
+class DiscoveryFailure extends DsPrintFailure {
+  final String? details;
+
+  const DiscoveryFailure(this.details);
+
+  @override
+  String get debugMessage => 'ds_print: printer discovery failed'
+      '${details == null ? '' : ' - $details'}';
+
+  @override
+  List<Object?> get props => [details];
 }

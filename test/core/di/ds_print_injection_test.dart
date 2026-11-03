@@ -15,9 +15,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ds_print/src/core/di/ds_print_injection.dart';
 import 'package:ds_print/src/domain/usecases/auto_print_usecase.dart';
+import 'package:ds_print/src/presentation/cubit/add_printer_cubit.dart';
 import 'package:ds_print/src/presentation/cubit/invoice_preview_cubit.dart';
 import 'package:ds_print/src/presentation/cubit/print_job_cubit.dart';
-import 'package:ds_print/src/presentation/cubit/printer_discovery_cubit.dart';
+import 'package:ds_print/src/presentation/cubit/saved_printers_cubit.dart';
 
 void main() {
   // Every test starts from, and leaves, an empty container — `dsPrintSl` is
@@ -35,9 +36,14 @@ void main() {
       },
     );
 
-    test('resolves PrinterDiscoveryCubit on an empty container', () async {
+    test('resolves SavedPrintersCubit on an empty container', () async {
       await dsPrintSl.reset();
-      expect(() => dsPrintResolve<PrinterDiscoveryCubit>(), returnsNormally);
+      expect(() => dsPrintResolve<SavedPrintersCubit>(), returnsNormally);
+    });
+
+    test('resolves AddPrinterCubit on an empty container', () async {
+      await dsPrintSl.reset();
+      expect(() => dsPrintResolve<AddPrinterCubit>(), returnsNormally);
     });
 
     test('resolves PrintJobCubit on an empty container', () async {

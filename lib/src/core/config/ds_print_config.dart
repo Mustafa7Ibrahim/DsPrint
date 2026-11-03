@@ -15,10 +15,21 @@ class DsPrintConfig {
   final DsPrintTheme? themeOverride;
   final Duration? printResultTimeout;
 
+  /// Whether the Add Printer sheet offers Bluetooth. Null (the default) shows
+  /// it. A `showBluetooth:` passed to [DsPrintAddPrinterButton],
+  /// [PrinterPickerScreen], `DsPrint.addPrinter` or `DsPrint.selectDevice`
+  /// overrides this for that one use.
+  final bool? showBluetooth;
+
+  /// Whether the Add Printer sheet offers LAN. Same rules as [showBluetooth].
+  final bool? showLan;
+
   const DsPrintConfig({
     this.navigatorKey,
     this.themeOverride,
     this.printResultTimeout,
+    this.showBluetooth,
+    this.showLan,
   });
 
   /// Set once by [DsPrint.configure]; read by `RootContextResolver`, which
