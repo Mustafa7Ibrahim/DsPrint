@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## 1.0.0
 
 Printers are now added manually, by connection type, and one of them is the
 active printer every print goes to.
