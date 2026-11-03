@@ -8,6 +8,7 @@ USB/Bluetooth/LAN thermal printer — either through a preview screen with a Pri
 button, or silently in the background.
 
 - **How this package is built internally:** [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md)
+- **A runnable host app using every API:** [`example/`](example/)
 
 ---
 
