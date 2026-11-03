@@ -4,8 +4,11 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/config/ds_print_strings.dart';
 import '../../core/config/ds_print_theme.dart';
 import '../../core/di/ds_print_injection.dart';
+import '../../core/error/ds_print_failure.dart';
 import '../cubit/invoice_preview_cubit.dart';
 import '../cubit/invoice_preview_state.dart';
+import '../cubit/print_job_cubit.dart';
+import '../cubit/print_job_state.dart';
 import '../renderer/surface_invoice_renderer.dart';
 import '../widgets/ds_print_app_bar.dart';
 import '../widgets/ds_print_loading.dart';
@@ -21,8 +24,11 @@ class InvoicePreviewScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (_) => dsPrintResolve<InvoicePreviewCubit>(),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (_) => dsPrintResolve<InvoicePreviewCubit>()),
+        BlocProvider(create: (_) => dsPrintResolve<PrintJobCubit>()),
+      ],
       child: _InvoicePreviewView(url: url, title: title),
     );
   }
@@ -40,6 +46,7 @@ class _InvoicePreviewView extends StatefulWidget {
 
 class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
   DsPrintWebSurfaceHandle? _surface;
+  InvoicePreviewCaptured? _lastCapture;
 
   void _handlePrint() {
     final surface = _surface;
@@ -52,14 +59,30 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
         );
   }
 
+  /// A captured invoice goes straight to the printer the user selected — the
+  /// picker only appears when there isn't one yet.
   void _handleState(BuildContext context, InvoicePreviewState state) {
     if (state is InvoicePreviewCaptured) {
+      _lastCapture = state;
+      context.read<PrintJobCubit>().autoPrint(state.payload);
+    } else if (state is InvoicePreviewFailure) {
+      DsPrintMessageDialog.show(
+        context,
+        DsPrintStrings.of(context).forFailure(state.failure),
+      );
+    }
+  }
+
+  void _handlePrintState(BuildContext context, PrintJobState state) {
+    if (state is! PrintJobFailure) return;
+    final capture = _lastCapture;
+    if (state.failure is NoPrinterSelectedFailure && capture != null) {
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => PrinterPickerScreen(payload: state.payload),
+          builder: (_) => PrinterPickerScreen(payload: capture.payload),
         ),
       );
-    } else if (state is InvoicePreviewFailure) {
+    } else {
       DsPrintMessageDialog.show(
         context,
         DsPrintStrings.of(context).forFailure(state.failure),
@@ -70,33 +93,38 @@ class _InvoicePreviewViewState extends State<_InvoicePreviewView> {
   @override
   Widget build(BuildContext context) {
     final strings = DsPrintStrings.of(context);
-    return BlocConsumer<InvoicePreviewCubit, InvoicePreviewState>(
-      listener: _handleState,
-      builder: (context, state) {
-        return Scaffold(
-          backgroundColor: DsPrintTheme.of(context).background,
-          appBar: DsPrintAppBar(
-            title: widget.title ?? strings.taxInvoice,
-            actions: [PrintActionButton(onPressed: _handlePrint)],
-          ),
-          body: SizedBox.expand(
-            child: Stack(
-              children: [
-                DsPrintWebSurface(
-                  url: widget.url,
-                  onReady: (handle) => _surface = handle,
-                  onPageFinished: () =>
-                      context.read<InvoicePreviewCubit>().onPageFinished(),
-                ),
-                if (state is InvoicePreviewLoading)
-                  const DsPrintLoadingIndicator(),
-                if (state is InvoicePreviewCapturing)
-                  const DsPrintCapturingScrim(),
-              ],
+    final isPrinting =
+        context.watch<PrintJobCubit>().state is PrintJobInProgress;
+    return BlocListener<PrintJobCubit, PrintJobState>(
+      listener: _handlePrintState,
+      child: BlocConsumer<InvoicePreviewCubit, InvoicePreviewState>(
+        listener: _handleState,
+        builder: (context, state) {
+          return Scaffold(
+            backgroundColor: DsPrintTheme.of(context).background,
+            appBar: DsPrintAppBar(
+              title: widget.title ?? strings.taxInvoice,
+              actions: [PrintActionButton(onPressed: _handlePrint)],
             ),
-          ),
-        );
-      },
+            body: SizedBox.expand(
+              child: Stack(
+                children: [
+                  DsPrintWebSurface(
+                    url: widget.url,
+                    onReady: (handle) => _surface = handle,
+                    onPageFinished: () =>
+                        context.read<InvoicePreviewCubit>().onPageFinished(),
+                  ),
+                  if (state is InvoicePreviewLoading)
+                    const DsPrintLoadingIndicator(),
+                  if (state is InvoicePreviewCapturing || isPrinting)
+                    const DsPrintCapturingScrim(),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -18,9 +18,11 @@ export 'src/domain/entities/printer_device.dart';
 export 'src/domain/entities/printer_interface_type.dart';
 export 'src/ds_print_facade.dart';
 // `show` keeps this package's public surface to exactly the screens
-// themselves — both files also declare internal helper widgets
-// (PrintActionButton, AddPrinterButton) that aren't part of the API.
+// themselves — invoice_preview_screen.dart also declares an internal helper
+// widget (PrintActionButton) that isn't part of the API.
 export 'src/presentation/screens/invoice_preview_screen.dart'
     show InvoicePreviewScreen;
 export 'src/presentation/screens/printer_picker_screen.dart'
     show PrinterPickerScreen;
+export 'src/presentation/widgets/ds_print_add_printer_button.dart'
+    show DsPrintAddPrinterButton;

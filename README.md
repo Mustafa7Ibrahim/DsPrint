@@ -8,6 +8,7 @@ USB/Bluetooth/LAN thermal printer — either through a preview screen with a Pri
 button, or silently in the background.
 
 - **How this package is built internally:** [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md)
+- **A runnable host app using every API:** [`example/`](example/)
 
 ---
 
@@ -41,7 +42,10 @@ host.
 ## Quick start
 
 ```dart
-// Open the invoice preview screen. The user taps Print, picks a device, done.
+// Once: let the user add a printer (USB, LAN or Bluetooth).
+DsPrint.selectDevice();
+
+// From then on, every print goes to that printer.
 DsPrint.url('https://api.example.com/invoices/1042');
 ```
 
@@ -57,9 +61,82 @@ No `BuildContext` needed — the package finds the root navigator itself.
 | `DsPrint.printUrlSilently(url, {copies})` | Renders `url` off-screen and prints it with no UI | `Either<DsPrintFailure, Unit>` |
 | `DsPrint.printBase64(base64, {copies})` | Prints an already-captured PNG | `Either<DsPrintFailure, Unit>` |
 | `DsPrint.printHtml(html)` | Prints raw HTML (rendered natively) | `Either<DsPrintFailure, Unit>` |
-| `DsPrint.selectDevice({context})` | Opens the picker to pair a printer without printing | `Future<void>` |
-| `DsPrint.discover()` | Lists connected devices | `Either<DsPrintFailure, List<PrinterDevice>>` |
+| `DsPrint.selectDevice({context})` | Opens the printers screen: add printers, choose the active one | `Future<void>` |
+| `DsPrint.addPrinter({context})` | Opens the Add Printer sheet on its own | `Future<PrinterDevice?>` |
+| `DsPrint.savedPrinters()` | Every printer the user has added | `Either<DsPrintFailure, List<PrinterDevice>>` |
+| `DsPrint.selectedPrinter()` | The active printer every print goes to | `Either<DsPrintFailure, PrinterDevice?>` |
+| `DsPrint.discover({interfaceType})` | Scans without saving; `null` scans USB + LAN | `Either<DsPrintFailure, List<PrinterDevice>>` |
 | `DsPrint.configure(config)` | Optional overrides — see [Customising](#customising) | `void` |
+
+### Printers — added manually, one active
+
+Nothing is ever discovered or paired behind the user's back. The user adds
+printers on the printers screen (`DsPrint.selectDevice()` or
+`PrinterPickerScreen`):
+
+1. **Add Printer** opens a sheet: choose **USB**, **Network (LAN)** or
+   **Bluetooth**, then **Next**.
+2. Only that connection type is scanned. LAN also accepts a typed IP address,
+   for a printer the scan can't see (another subnet, say).
+3. Tapping a printer saves it and makes it the **active** printer.
+
+The screen lists every saved printer with its connection type and marks the
+active one. Tapping another printer makes it active; swiping one away (with a
+confirmation) removes it — removing the active printer leaves none active.
+
+**The active printer is used automatically by every print call** —
+`printUrlSilently`, `printBase64`, `printHtml`, and the preview screen's Print
+button. When none is active, the silent calls return
+`NoPrinterSelectedFailure` and the preview screen opens the printers screen
+instead.
+
+#### The Add Printer button in your own UI
+
+`DsPrintAddPrinterButton` is the same button, usable on any screen without the
+printers screen:
+
+```dart
+DsPrintAddPrinterButton(
+  onPrinterAdded: (printer) => debugPrint('now printing to ${printer.id}'),
+  label: 'Connect a printer',          // optional, defaults to "Add Printer"
+  style: ElevatedButton.styleFrom(...), // optional, merged over the default
+  showBluetooth: false,                 // optional, hide Bluetooth in the sheet
+  showLan: true,                        // optional, hide LAN with false
+)
+```
+
+#### Choosing which connection types are offered
+
+USB is always offered. Bluetooth and LAN can be hidden app-wide:
+
+```dart
+DsPrint.configure(const DsPrintConfig(showBluetooth: false, showLan: true));
+```
+
+or for one place, with the same `showBluetooth` / `showLan` parameters on
+`DsPrintAddPrinterButton`, `PrinterPickerScreen`, `DsPrint.addPrinter()` and
+`DsPrint.selectDevice()` — a value there overrides the app-wide one. Leaving a
+flag `null` shows the option. When only USB is left, it's pre-selected so the
+user goes straight to **Next**.
+
+Or open the sheet from a control of your own:
+
+```dart
+final printer = await DsPrint.addPrinter(); // null if the user closed it
+```
+
+#### Bluetooth and LAN on Android
+
+- **Bluetooth** lists printers already **paired in Android's Bluetooth
+  settings** — the Star SDK cannot pair one itself. On Android 12+ the sheet
+  asks for the "Nearby devices" (`BLUETOOTH_CONNECT`) permission the first
+  time; the permission itself is declared by the Star SDK, so there is nothing
+  to add to your manifest.
+- **LAN** needs nothing extra unless your app **targets SDK 37 (Android 17)**:
+  then declare
+  `<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />`
+  in your app's manifest, and the sheet will request it before scanning.
+  Google advises against declaring it below target 37, so the package doesn't.
 
 ### `DsPrint.url` — preview then print
 
@@ -68,8 +145,9 @@ DsPrint.url(invoiceUrl, title: 'Order #1042');
 ```
 
 Opens a screen showing the invoice with a **Print** action in the app bar.
-Tapping it captures what is on screen and pushes the device picker; tapping a
-device prints and pops back.
+Tapping it captures what is on screen and prints it to the active printer. If
+no printer is active yet it opens the printers screen; adding or tapping a
+printer there prints and pops back.
 
 `title` defaults to a localised "Tax Invoice".
 
@@ -86,14 +164,14 @@ result.fold(
 );
 ```
 
-It prints to the **paired** printer, and if none is paired yet, to the first
-device discovered — which it then pairs for next time. The pairing survives app
-restarts.
+It prints to the **active** printer (see [Printers](#printers--added-manually-one-active)).
+It never scans: with no active printer it returns `NoPrinterSelectedFailure`.
+The choice survives app restarts, and a failed print does not drop it.
 
-**Safe to call unconditionally.** It looks for the printer *before* it renders
-anything, so a store with no printer attached gets `NoDeviceFoundFailure` with
-no overlay, no indicator and no invoice render — nothing the user can see. Fire
-it after every order; the stores that have a printer print, the rest no-op.
+**Safe to call unconditionally.** It checks for the printer *before* it renders
+anything, so a store with no printer gets `NoPrinterSelectedFailure` with no
+overlay, no indicator and no invoice render — nothing the user can see. Fire it
+after every order; the stores that have a printer print, the rest no-op.
 
 "No UI" means no *navigation*: for the 1–3 seconds the render takes, the screen
 keeps showing what it was showing, dimmed by a scrim with a loading indicator.
@@ -124,8 +202,8 @@ GoRoute(
 ),
 ```
 
-`PrinterPickerScreen` with no payload pairs a device; with a payload it also
-prints it to whichever device is tapped.
+`PrinterPickerScreen` with no payload manages printers; with a payload it also
+prints it — to the printer tapped, or to one added right there — and pops.
 
 ---
 
@@ -139,7 +217,10 @@ checked at compile time:
 | --- | --- |
 | `EmptyPayloadFailure` | Nothing to print |
 | `NoDeviceFoundFailure` | Discovery returned no printers |
-| `NoPrinterSelectedFailure` | A device was chosen but has no id/interface |
+| `NoPrinterSelectedFailure` | No active printer — the user hasn't added/chosen one |
+| `PermissionDeniedFailure` | The user refused the "Nearby devices" permission a scan needs |
+| `InterfaceUnavailableFailure(interfaceType)` | Bluetooth is off, there is no network, or USB is unavailable |
+| `DiscoveryFailure(details)` | The Star SDK failed to scan |
 | `UnsupportedPlatformFailure` | Printing attempted off Android |
 | `CaptureFailure(details)` | The invoice failed to render or snapshot |
 | `NativePrintFailure(details)` | The printer or SDK reported an error, or timed out |
@@ -163,7 +244,8 @@ Everything the package needs, it reads from the host at the point of use:
 | Colours | `Theme.of(context).primaryColor` | The flavor's brand colour; app bars, buttons, spinners and tile borders all follow it |
 | Language | `Localizations.maybeLocaleOf(context)` | Arabic and English strings ship inside the package; defaults to Arabic |
 | Navigator | Root `Navigator` found by walking the widget tree | Overridable with a `navigatorKey` |
-| Paired printer | `SharedPreferences` | Keys `printer-deviceId` and `printer-device-interface-type` |
+| Active printer | `SharedPreferences` | Keys `printer-deviceId` and `printer-device-interface-type` (unchanged, so existing pairings carry over) |
+| Saved printers | `SharedPreferences` | Key `ds_print-saved-printers`; seeded once from the active printer on upgrade |
 | Dependencies | A private `GetIt` instance | Never touches the host's `sl` |
 
 Two consequences worth knowing:
@@ -184,6 +266,8 @@ DsPrint.configure(DsPrintConfig(
   navigatorKey: myNavigatorKey,          // if tree-walking finds the wrong one
   printResultTimeout: Duration(seconds: 30), // default 20s
   themeOverride: DsPrintTheme(...),      // bypasses ambient theme entirely
+  showBluetooth: false,                  // hide Bluetooth in Add Printer
+  showLan: false,                        // hide LAN in Add Printer
 ));
 ```
 
@@ -205,7 +289,9 @@ package's Android library, and there is no iOS counterpart. The preview screen
 and capture pipeline are pure Flutter and run anywhere.
 
 Nothing needs adding to the host's `AndroidManifest.xml` or `build.gradle` —
-the plugin's own manifest and Gradle file are merged in automatically.
+the plugin's own manifest and Gradle file are merged in automatically. The one
+exception is `ACCESS_LOCAL_NETWORK` for apps targeting SDK 37 — see
+[Bluetooth and LAN on Android](#bluetooth-and-lan-on-android).
 
 ---
 
@@ -215,9 +301,17 @@ the plugin's own manifest and Gradle file are merged in automatically.
 Android USB permission dialog to have been accepted for that device. Unplug,
 replug, accept.
 
-**Printing works once, then stops.** Usually the paired device id went stale
-(different USB port or a reset printer). The package clears its cached pairing
-automatically on a native failure and re-discovers on the next attempt.
+**Printing works once, then stops.** Usually the saved device id went stale
+(different USB port or a reset printer). Remove the printer on the printers
+screen and add it again.
+
+**A Bluetooth printer doesn't show up.** Pair it in Android's Bluetooth
+settings first, and make sure Bluetooth is on and the "Nearby devices"
+permission was allowed.
+
+**A LAN printer doesn't show up.** The phone and the printer must be on the
+same network; the scan does not cross subnets. Type the printer's IP address
+in the sheet instead.
 
 **The invoice prints cut off at the bottom.** The capture waits for the page
 height to stabilise, capped at 20 seconds. A page that keeps growing past that —
@@ -237,9 +331,16 @@ the widget, keep that behaviour.
 flutter test
 ```
 
-107 tests, all passing. They cover the use cases, the capture pipeline
+216 tests, all passing. They cover the use cases, the capture pipeline
 services, the payload chunker, the print job queue, the cubits and both
 screens' DI wiring.
+
+Bluetooth and LAN discovery are tested from the platform channel inward: the
+real discovery datasource runs against a mocked native side of
+`com.printer.discover/event`, both directly
+(`printer_discovery_datasource_test.dart`) and end to end through the printers
+screen and Add Printer sheet (`printer_picker_screen_test.dart`). The Kotlin
+side — the permission prompt and the Star SDK scan itself — needs a device.
 
 Note for contributors: `CircularProgressIndicator` schedules frames forever, so
 any test that ends on a loading state must use bounded `pump(Duration)` calls —

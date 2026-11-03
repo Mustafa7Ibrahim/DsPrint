@@ -9,6 +9,7 @@ import com.starmicronics.stario10.InterfaceType
 import com.starmicronics.stario10.StarConnectionSettings
 import com.starmicronics.stario10.StarDeviceDiscoveryManager
 import com.starmicronics.stario10.StarDeviceDiscoveryManagerFactory
+import com.starmicronics.stario10.StarIO10Exception
 import com.starmicronics.stario10.StarPrinter
 import com.starmicronics.stario10.starxpandcommand.DocumentBuilder
 import com.starmicronics.stario10.starxpandcommand.PrinterBuilder
@@ -23,6 +24,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 private const val TAG = "StarPrinterGateway"
+
+/** Error code reported for discovery failures that carry no `StarIO10ErrorCode`. */
+const val DISCOVERY_FAILED = "DISCOVERY_FAILED"
 
 /** A discovered Star printer, translated out of the SDK's own type. */
 data class DiscoveredPrinter(
@@ -46,21 +50,24 @@ class StarPrinterGateway {
 
     private var discoveryManager: StarDeviceDiscoveryManager? = null
 
+    /**
+     * Scans [interfaces] only. Failures go to [onError] with the SDK's
+     * `StarIO10ErrorCode` name — `BluetoothUnavailable` / `NetworkUnavailable`
+     * / `UsbUnavailable` when that radio is off — or [DISCOVERY_FAILED].
+     * They used to be logged and swallowed, which left the Dart side waiting
+     * out its full timeout for a scan that had never started.
+     */
     fun discover(
         context: Context,
+        interfaces: List<InterfaceType>,
         onPrinterFound: (DiscoveredPrinter) -> Unit,
         onDiscoveryFinished: () -> Unit,
+        onError: (code: String, message: String?) -> Unit,
     ) {
         try {
-            discoveryManager?.stopDiscovery()
-            discoveryManager = StarDeviceDiscoveryManagerFactory.create(
-                listOf(InterfaceType.Usb, InterfaceType.Lan),
-                // Bluetooth intentionally left out: it needs a manifest
-                // permission the app doesn't request.
-                // listOf(InterfaceType.Usb, InterfaceType.Lan, InterfaceType.Bluetooth),
-                context,
-            )
-            discoveryManager?.discoveryTime = 1000
+            stopDiscovery()
+            discoveryManager = StarDeviceDiscoveryManagerFactory.create(interfaces, context)
+            discoveryManager?.discoveryTime = discoveryTimeFor(interfaces)
             discoveryManager?.callback = object : StarDeviceDiscoveryManager.Callback {
                 override fun onPrinterFound(printer: StarPrinter) {
                     Log.d(TAG, "onPrinterFound id: ${printer.connectionSettings.identifier}")
@@ -79,9 +86,31 @@ class StarPrinterGateway {
                 }
             }
             discoveryManager?.startDiscovery()
+        } catch (e: StarIO10Exception) {
+            Log.d(TAG, "discover() - Error: $e")
+            onError(e.errorCode.name, e.message)
         } catch (e: Exception) {
             Log.d(TAG, "discover() - Error: $e")
+            onError(DISCOVERY_FAILED, e.message ?: e.toString())
         }
+    }
+
+    fun stopDiscovery() {
+        try {
+            discoveryManager?.stopDiscovery()
+        } catch (e: Exception) {
+            Log.d(TAG, "stopDiscovery() - Error: $e")
+        }
+    }
+
+    /**
+     * The official StarXpand sample scans LAN for 5 s and Bluetooth for 2 s; a
+     * 1 s network scan misses printers. USB keeps the 1 s it has always used.
+     */
+    private fun discoveryTimeFor(interfaces: List<InterfaceType>): Int = when {
+        InterfaceType.Lan in interfaces -> 5_000
+        InterfaceType.Bluetooth in interfaces -> 2_000
+        else -> 1_000
     }
 
     /**

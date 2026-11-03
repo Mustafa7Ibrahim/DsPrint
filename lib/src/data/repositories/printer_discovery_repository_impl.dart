@@ -12,34 +12,34 @@ class PrinterDiscoveryRepositoryImpl implements PrinterDiscoveryRepository {
 
   const PrinterDiscoveryRepositoryImpl(this._dataSource);
 
-  // The domain repository takes no interface parameter; USB matches the
-  // legacy default (`EnumPrinterTypeConnectionExtension.fromString(null)`
-  // resolves to USB).
-  static const _defaultInterface = PrinterInterfaceType.usb;
-
   @override
-  Stream<Either<DsPrintFailure, PrinterDevice>>
-      watchDiscoveredDevices() async* {
+  Stream<Either<DsPrintFailure, PrinterDevice>> watchDiscoveredDevices({
+    PrinterInterfaceType? interfaceType,
+  }) async* {
     try {
-      await for (final device in _dataSource.watch(_defaultInterface)) {
+      await for (final device
+          in _dataSource.watch(interfaceType: interfaceType)) {
         yield Right(device);
       }
     } on DsPrintException catch (e) {
       yield Left(_mapException(e));
     } catch (e) {
-      yield Left(NativePrintFailure(e.toString()));
+      yield Left(DiscoveryFailure(e.toString()));
     }
   }
 
   @override
-  Future<Either<DsPrintFailure, List<PrinterDevice>>> discoverOnce() async {
+  Future<Either<DsPrintFailure, List<PrinterDevice>>> discoverOnce({
+    PrinterInterfaceType? interfaceType,
+  }) async {
     try {
-      final devices = await _dataSource.discoverOnce(_defaultInterface);
+      final devices =
+          await _dataSource.discoverOnce(interfaceType: interfaceType);
       return Right(devices);
     } on DsPrintException catch (e) {
       return Left(_mapException(e));
     } catch (e) {
-      return Left(NativePrintFailure(e.toString()));
+      return Left(DiscoveryFailure(e.toString()));
     }
   }
 
@@ -50,5 +50,9 @@ class PrinterDiscoveryRepositoryImpl implements PrinterDiscoveryRepository {
         CaptureException(:final details) => CaptureFailure(details),
         NativePrintException(:final details) => NativePrintFailure(details),
         StorageException(:final details) => StorageFailure(details),
+        PermissionDeniedException() => const PermissionDeniedFailure(),
+        InterfaceUnavailableException(:final interfaceType) =>
+          InterfaceUnavailableFailure(interfaceType),
+        DiscoveryException(:final details) => DiscoveryFailure(details),
       };
 }
