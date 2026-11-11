@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -8,6 +9,8 @@ import '../../domain/entities/print_payload.dart';
 import '../../domain/entities/printer_device.dart';
 import '../cubit/print_job_cubit.dart';
 import '../cubit/print_job_state.dart';
+import '../cubit/printer_connection_cubit.dart';
+import '../cubit/printer_connection_state.dart';
 import '../cubit/saved_printers_cubit.dart';
 import '../cubit/saved_printers_state.dart';
 import '../widgets/ds_print_add_printer_button.dart';
@@ -47,6 +50,7 @@ class PrinterPickerScreen extends StatelessWidget {
       providers: [
         BlocProvider(create: (_) => dsPrintResolve<SavedPrintersCubit>()),
         BlocProvider(create: (_) => dsPrintResolve<PrintJobCubit>()),
+        BlocProvider(create: (_) => dsPrintResolve<PrinterConnectionCubit>()),
       ],
       child: _PrinterPickerView(
         payload: payload,
@@ -123,14 +127,32 @@ class _PrinterPickerViewState extends State<_PrinterPickerView> {
   Widget build(BuildContext context) {
     final strings = DsPrintStrings.of(context);
     final theme = DsPrintTheme.of(context);
-    return BlocListener<PrintJobCubit, PrintJobState>(
-      listener: (context, state) {
-        if (state is PrintJobCompleted) {
-          Navigator.of(context).pop();
-        } else if (state is PrintJobFailure) {
-          DsPrintMessageDialog.show(context, strings.forFailure(state.failure));
-        }
-      },
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<PrintJobCubit, PrintJobState>(
+          listener: (context, state) {
+            if (state is PrintJobCompleted) {
+              Navigator.of(context).pop();
+            } else if (state is PrintJobFailure) {
+              DsPrintMessageDialog.show(
+                  context, strings.forFailure(state.failure));
+            }
+          },
+        ),
+        // Re-check only when the set of printers changed, not on a mere
+        // change of the selected one.
+        BlocListener<SavedPrintersCubit, SavedPrintersState>(
+          listenWhen: (previous, current) =>
+              current is SavedPrintersLoaded &&
+              (previous is! SavedPrintersLoaded ||
+                  !listEquals(previous.printers, current.printers)),
+          listener: (context, state) {
+            if (state is SavedPrintersLoaded) {
+              context.read<PrinterConnectionCubit>().checkAll(state.printers);
+            }
+          },
+        ),
+      ],
       child: Scaffold(
         backgroundColor: theme.background,
         appBar: DsPrintAppBar(title: strings.printers),
@@ -163,29 +185,45 @@ class _PrinterPickerViewState extends State<_PrinterPickerView> {
                         printers: final printers,
                         selected: final selected
                       ) =>
-                        ListView.separated(
-                          padding: const EdgeInsets.all(24),
-                          itemCount: printers.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 16),
-                          itemBuilder: (context, index) {
-                            final device = printers[index];
-                            return Dismissible(
-                              key: ValueKey(
-                                  '${device.interfaceType.name}:${device.id}'),
-                              direction: DismissDirection.endToStart,
-                              confirmDismiss: (_) => _confirmRemove(),
-                              onDismissed: (_) => context
-                                  .read<SavedPrintersCubit>()
-                                  .remove(device),
-                              background: const _RemoveBackground(),
-                              child: PrinterDeviceTile(
-                                device: device,
-                                isSelected: device == selected,
-                                onTap: () => _handleTap(device),
-                              ),
-                            );
-                          },
+                        RefreshIndicator(
+                          onRefresh: () => context
+                              .read<PrinterConnectionCubit>()
+                              .checkAll(printers),
+                          child: ListView.separated(
+                            // Always scrollable so pull-to-refresh works with
+                            // a short list.
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.all(24),
+                            itemCount: printers.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 16),
+                            itemBuilder: (context, index) {
+                              final device = printers[index];
+                              return Dismissible(
+                                key: ValueKey(
+                                    '${device.interfaceType.name}:${device.id}'),
+                                direction: DismissDirection.endToStart,
+                                confirmDismiss: (_) => _confirmRemove(),
+                                onDismissed: (_) => context
+                                    .read<SavedPrintersCubit>()
+                                    .remove(device),
+                                background: const _RemoveBackground(),
+                                child: BlocSelector<
+                                    PrinterConnectionCubit,
+                                    PrinterConnectionState,
+                                    PrinterConnectionStatus?>(
+                                  selector: (state) => state.statuses[device],
+                                  builder: (context, status) =>
+                                      PrinterDeviceTile(
+                                    device: device,
+                                    isSelected: device == selected,
+                                    connectionStatus: status,
+                                    onTap: () => _handleTap(device),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
                         ),
                       SavedPrintersFailure(failure: final failure) => Center(
                           child: Text(strings.forFailure(failure),

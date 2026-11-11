@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/error/ds_print_exception.dart';
 import '../../domain/entities/print_job.dart';
+import '../../domain/entities/printer_device.dart';
 import '../models/print_channel_request_model.dart';
 import '../services/chunk_status_resolver.dart';
 import '../services/payload_chunker.dart';
@@ -11,6 +12,10 @@ import '../services/payload_chunker.dart';
 abstract class PrinterNativeDataSource {
   /// Completes on native success, throws a [DsPrintException] on failure.
   Future<void> print(PrintJob job);
+
+  /// Whether [device] answers a short open/close, waiting at most [timeout].
+  /// Throws a [DsPrintException] when the check itself could not run.
+  Future<bool> checkConnection(PrinterDevice device, Duration timeout);
 }
 
 class PrinterNativeDataSourceImpl implements PrinterNativeDataSource {
@@ -51,6 +56,30 @@ class PrinterNativeDataSourceImpl implements PrinterNativeDataSource {
       // Sequential, not interleaved — each copy waits for its own native
       // result before the next copy's chunks are sent.
       await _sendOnce(job, chunks);
+    }
+  }
+
+  @override
+  Future<bool> checkConnection(PrinterDevice device, Duration timeout) async {
+    try {
+      final reachable = await _methodChannel.invokeMethod<bool>(
+        'checkConnection',
+        {
+          'printerId': device.id,
+          'printerType': device.interfaceType.nativeName,
+          'timeoutMs': timeout.inMilliseconds,
+        },
+      ).timeout(
+        // Native honours [timeout] itself; this only guards a native side
+        // that never answers.
+        timeout + const Duration(seconds: 3),
+        onTimeout: () => false,
+      );
+      return reachable ?? false;
+    } on PlatformException catch (e) {
+      throw NativePrintException(e.message ?? e.code);
+    } on MissingPluginException {
+      throw const UnsupportedPlatformException();
     }
   }
 

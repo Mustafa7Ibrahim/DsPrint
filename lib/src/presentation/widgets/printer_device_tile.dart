@@ -4,6 +4,7 @@ import '../../core/config/ds_print_strings.dart';
 import '../../core/config/ds_print_theme.dart';
 import '../../domain/entities/printer_device.dart';
 import '../../domain/entities/printer_interface_type.dart';
+import '../cubit/printer_connection_state.dart';
 
 /// Port of the host app's `PrinterDeviceItem`: selection dot, the connection
 /// type over the printer's id, and a type icon. Uses [InkWell] directly — the
@@ -17,12 +18,17 @@ class PrinterDeviceTile extends StatelessWidget {
   /// Off in the Add Printer sheet, where a scan result isn't "selected" yet.
   final bool showSelectionIndicator;
 
+  /// Reachability shown as a dot and a short label under the id. Null shows
+  /// nothing.
+  final PrinterConnectionStatus? connectionStatus;
+
   const PrinterDeviceTile({
     super.key,
     required this.device,
     required this.isSelected,
     required this.onTap,
     this.showSelectionIndicator = true,
+    this.connectionStatus,
   });
 
   static IconData iconFor(PrinterInterfaceType interfaceType) =>
@@ -88,6 +94,10 @@ class PrinterDeviceTile extends StatelessWidget {
                         textDirection: TextDirection.ltr,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (connectionStatus != null) ...[
+                        const SizedBox(height: 6),
+                        _ConnectionStatusLabel(status: connectionStatus!),
+                      ],
                     ],
                   ),
                 ),
@@ -107,6 +117,50 @@ class PrinterDeviceTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ConnectionStatusLabel extends StatelessWidget {
+  final PrinterConnectionStatus status;
+
+  const _ConnectionStatusLabel({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = DsPrintTheme.of(context);
+    final strings = DsPrintStrings.of(context);
+    final (color, label) = switch (status) {
+      PrinterConnectionStatus.checking => (
+          theme.unselectedIndicator,
+          strings.checkingConnection
+        ),
+      PrinterConnectionStatus.connected => (
+          theme.connectedIndicator,
+          strings.connected
+        ),
+      PrinterConnectionStatus.disconnected => (
+          theme.disconnectedIndicator,
+          strings.notConnected
+        ),
+    };
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            label,
+            style: theme.bodyStyle.copyWith(fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

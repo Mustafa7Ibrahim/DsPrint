@@ -147,3 +147,16 @@ class DiscoveryFailure extends DsPrintFailure {
   @override
   List<Object?> get props => [details];
 }
+
+/// The selected printer did not answer the pre-print connection check — it is
+/// off, out of range or unplugged.
+class PrinterUnreachableFailure extends DsPrintFailure {
+  const PrinterUnreachableFailure();
+
+  @override
+  String get debugMessage =>
+      'ds_print: the selected printer did not answer a connection check';
+
+  @override
+  List<Object?> get props => [];
+}

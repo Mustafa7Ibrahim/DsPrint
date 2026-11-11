@@ -73,6 +73,12 @@ class FakePrinterNativeDataSource implements PrinterNativeDataSource {
   Future<void> print(PrintJob job) async {
     if (errorToThrow != null) throw errorToThrow!;
   }
+
+  @override
+  Future<bool> checkConnection(PrinterDevice device, Duration timeout) async {
+    if (errorToThrow != null) throw errorToThrow!;
+    return true;
+  }
 }
 
 class FakeSelectedPrinterDataSource implements SelectedPrinterDataSource {

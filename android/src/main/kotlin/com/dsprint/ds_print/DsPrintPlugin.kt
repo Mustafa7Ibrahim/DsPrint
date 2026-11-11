@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import com.dsprint.ds_print.channel.DsPrintEventSink
 import com.dsprint.ds_print.channel.PrintChannelRequest
@@ -19,11 +20,17 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 private const val DISCOVERY_EVENT_CHANNEL = "com.printer.discover/event"
 private const val PRINT_METHOD_CHANNEL = "com.printer.html/sendToNative"
 private const val PRINT_RESULT_EVENT_CHANNEL = "com.printer.html/listenFromNative"
 private const val METHOD_FROM_FLUTTER = "fromFlutter"
+private const val METHOD_CHECK_CONNECTION = "checkConnection"
+private const val TAG = "DsPrintPlugin"
 
 // Discovery channel events beyond device maps. Must match the constants in
 // `printer_discovery_datasource.dart`.
@@ -137,17 +144,43 @@ class DsPrintPlugin : FlutterPlugin, ActivityAware,
     //---------------------------------------------------------------------- print channel
 
     private val printMethodCallHandler = MethodChannel.MethodCallHandler { call, result ->
-        if (call.method != METHOD_FROM_FLUTTER) {
-            result.notImplemented()
-            return@MethodCallHandler
+        when (call.method) {
+            METHOD_FROM_FLUTTER -> {
+                val arguments = call.arguments as? Map<*, *>
+                if (arguments == null) {
+                    result.success("no arguments")
+                    return@MethodCallHandler
+                }
+                handle(PrintChannelRequest.fromMap(arguments))
+                result.success("Big Data Working")
+            }
+            METHOD_CHECK_CONNECTION -> checkConnection(call.arguments as? Map<*, *>, result)
+            else -> result.notImplemented()
         }
-        val arguments = call.arguments as? Map<*, *>
-        if (arguments == null) {
-            result.success("no arguments")
-            return@MethodCallHandler
+    }
+
+    private fun checkConnection(arguments: Map<*, *>?, result: MethodChannel.Result) {
+        val printerId = arguments?.get("printerId") as? String
+        val printerType = arguments?.get("printerType") as? String
+        val timeoutMs = (arguments?.get("timeoutMs") as? Number)?.toInt()
+        if (printerId.isNullOrBlank() || printerType == null || timeoutMs == null || timeoutMs <= 0) {
+            result.error("bad-args", "checkConnection needs printerId, printerType and timeoutMs", null)
+            return
         }
-        handle(PrintChannelRequest.fromMap(arguments))
-        result.success("Big Data Working")
+        CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
+            val reachable = try {
+                starPrinterGateway.isReachable(
+                    context = applicationContext,
+                    printerId = printerId,
+                    printerType = printerType,
+                    timeoutMs = timeoutMs,
+                )
+            } catch (e: Throwable) {
+                Log.d(TAG, "checkConnection() - Error: $e")
+                false
+            }
+            mainHandler.post { result.success(reachable) }
+        }
     }
 
     private fun handle(request: PrintChannelRequest) {

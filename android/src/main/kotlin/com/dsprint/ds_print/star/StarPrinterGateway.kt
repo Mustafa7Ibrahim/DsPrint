@@ -3,6 +3,7 @@ package com.dsprint.ds_print.star
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.hardware.usb.UsbManager
 import android.util.Base64
 import android.util.Log
 import com.starmicronics.stario10.InterfaceType
@@ -10,6 +11,7 @@ import com.starmicronics.stario10.StarConnectionSettings
 import com.starmicronics.stario10.StarDeviceDiscoveryManager
 import com.starmicronics.stario10.StarDeviceDiscoveryManagerFactory
 import com.starmicronics.stario10.StarIO10Exception
+import com.starmicronics.stario10.StarIO10InUseException
 import com.starmicronics.stario10.StarPrinter
 import com.starmicronics.stario10.starxpandcommand.DocumentBuilder
 import com.starmicronics.stario10.starxpandcommand.PrinterBuilder
@@ -24,6 +26,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 private const val TAG = "StarPrinterGateway"
+
+/** USB vendor id of Star Micronics (0x0519). */
+private const val STAR_USB_VENDOR_ID = 0x0519
 
 /** Error code reported for discovery failures that carry no `StarIO10ErrorCode`. */
 const val DISCOVERY_FAILED = "DISCOVERY_FAILED"
@@ -189,6 +194,45 @@ class StarPrinterGateway {
         }
     }
 
+    /**
+     * Opens and closes a connection to the printer to find out whether it
+     * answers, waiting at most [timeoutMs] for the open.
+     *
+     * "In use" counts as reachable: the printer is there, another connection
+     * simply holds it. Any other failure (timeout, unplugged, radio off) is
+     * "not reachable".
+     */
+    suspend fun isReachable(
+        context: Context,
+        printerId: String,
+        printerType: String,
+        timeoutMs: Int,
+    ): Boolean {
+        if (printerType == "Usb" && !isStarUsbDeviceAttached(context)) return false
+        val printer = try {
+            StarPrinter(StarConnectionSettings(toInterfaceType(printerType), printerId), context)
+                .also { it.openTimeout = timeoutMs }
+        } catch (e: Exception) {
+            Log.d(TAG, "isReachable() - setup error: $e")
+            return false
+        }
+        return try {
+            printer.openAsync().await()
+            true
+        } catch (e: StarIO10InUseException) {
+            true
+        } catch (e: Exception) {
+            Log.d(TAG, "isReachable() - Error: $e")
+            false
+        } finally {
+            try {
+                printer.closeAsync().await()
+            } catch (e: Exception) {
+                Log.d(TAG, "isReachable() - close error: $e")
+            }
+        }
+    }
+
     /** Prints an already-rendered [bitmap] (used by the HTML capture path). */
     fun printBitmap(
         printerId: String,
@@ -242,6 +286,12 @@ class StarPrinterGateway {
             Log.d(TAG, "base64ToBitmap() - exception: $e")
             null
         }
+    }
+
+    /** No attached Star USB device means a USB printer cannot answer — known instantly from UsbManager, instead of waiting out openTimeout. Unknown (no UsbManager) defers to the SDK. */
+    private fun isStarUsbDeviceAttached(context: Context): Boolean {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return true
+        return usbManager.deviceList.values.any { it.vendorId == STAR_USB_VENDOR_ID }
     }
 
     private fun toInterfaceType(printerType: String): InterfaceType = when (printerType) {

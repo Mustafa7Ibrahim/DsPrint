@@ -20,6 +20,7 @@ import '../../domain/repositories/selected_printer_repository.dart';
 import '../../domain/usecases/add_printer_usecase.dart';
 import '../../domain/usecases/auto_print_usecase.dart';
 import '../../domain/usecases/capture_invoice_usecase.dart';
+import '../../domain/usecases/check_printer_connection_usecase.dart';
 import '../../domain/usecases/clear_selected_printer_usecase.dart';
 import '../../domain/usecases/discover_printers_usecase.dart';
 import '../../domain/usecases/get_saved_printers_usecase.dart';
@@ -31,6 +32,7 @@ import '../../domain/usecases/select_printer_usecase.dart';
 import '../../presentation/cubit/add_printer_cubit.dart';
 import '../../presentation/cubit/invoice_preview_cubit.dart';
 import '../../presentation/cubit/print_job_cubit.dart';
+import '../../presentation/cubit/printer_connection_cubit.dart';
 import '../../presentation/cubit/saved_printers_cubit.dart';
 import '../../presentation/renderer/overlay_invoice_renderer.dart';
 import '../config/ds_print_config.dart';
@@ -106,6 +108,8 @@ void dsPrintInjection() {
   // use cases
   dsPrintSl.registerLazySingleton(
       () => CaptureInvoiceUseCase(dsPrintSl<InvoiceCaptureRepository>()));
+  dsPrintSl.registerLazySingleton(
+      () => CheckPrinterConnectionUseCase(dsPrintSl<PrinterRepository>()));
   dsPrintSl.registerLazySingleton(() =>
       ClearSelectedPrinterUseCase(dsPrintSl<SelectedPrinterRepository>()));
   dsPrintSl.registerLazySingleton(
@@ -158,6 +162,10 @@ void dsPrintInjection() {
       selectPrinter: dsPrintSl<SelectPrinterUseCase>(),
       removePrinter: dsPrintSl<RemovePrinterUseCase>(),
     ),
+  );
+  dsPrintSl.registerFactory(
+    () => PrinterConnectionCubit(
+        checkConnection: dsPrintSl<CheckPrinterConnectionUseCase>()),
   );
   dsPrintSl.registerFactory(
     () => AddPrinterCubit(

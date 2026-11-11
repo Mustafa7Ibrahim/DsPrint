@@ -21,12 +21,16 @@ import 'package:ds_print/src/core/di/ds_print_injection.dart';
 import 'package:ds_print/src/data/datasources/saved_printers_datasource.dart';
 import 'package:ds_print/src/domain/entities/print_job.dart';
 import 'package:ds_print/src/domain/usecases/auto_print_usecase.dart';
+import 'package:ds_print/src/domain/usecases/check_printer_connection_usecase.dart';
 import 'package:ds_print/src/domain/usecases/print_job_usecase.dart';
 import 'package:ds_print/src/presentation/widgets/ds_print_add_printer_sheet.dart';
 import 'package:ds_print/src/presentation/widgets/ds_print_message_dialog.dart';
 import 'package:ds_print/src/presentation/widgets/printer_device_tile.dart';
 
 class MockPrintJobUseCase extends Mock implements PrintJobUseCase {}
+
+class MockCheckConnectionUseCase extends Mock
+    implements CheckPrinterConnectionUseCase {}
 
 const _discoveryChannel = EventChannel('com.printer.discover/event');
 
@@ -60,6 +64,7 @@ void main() {
         paperWidth: PaperWidth.html,
       ),
     );
+    registerFallbackValue(_usb);
   });
 
   setUp(() async {
@@ -75,6 +80,12 @@ void main() {
     dsPrintInjection();
     dsPrintSl.allowReassignment = true;
     dsPrintSl.registerLazySingleton<PrintJobUseCase>(() => printJob);
+    // No native side here, so the Printers-screen connection check is faked.
+    final checkConnection = MockCheckConnectionUseCase();
+    when(() => checkConnection(any()))
+        .thenAnswer((_) async => const Right(true));
+    dsPrintSl.registerLazySingleton<CheckPrinterConnectionUseCase>(
+        () => checkConnection);
     dsPrintSl.allowReassignment = false;
   });
 

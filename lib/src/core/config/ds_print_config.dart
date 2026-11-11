@@ -15,6 +15,11 @@ class DsPrintConfig {
   final DsPrintTheme? themeOverride;
   final Duration? printResultTimeout;
 
+  /// How long the pre-print / Printers-screen connection check waits for the
+  /// printer to answer. Null uses 3 seconds for USB/LAN and 5 seconds for
+  /// Bluetooth.
+  final Duration? connectionCheckTimeout;
+
   /// Whether the Add Printer sheet offers Bluetooth. Null (the default) shows
   /// it. A `showBluetooth:` passed to [DsPrintAddPrinterButton],
   /// [PrinterPickerScreen], `DsPrint.addPrinter` or `DsPrint.selectDevice`
@@ -28,6 +33,7 @@ class DsPrintConfig {
     this.navigatorKey,
     this.themeOverride,
     this.printResultTimeout,
+    this.connectionCheckTimeout,
     this.showBluetooth,
     this.showLan,
   });

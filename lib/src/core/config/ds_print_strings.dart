@@ -121,6 +121,15 @@ class DsPrintStrings {
       ? 'تعذر قراءة الطابعة المحفوظة.'
       : 'Could not read the saved printer.';
 
+  String get printerNotConnected =>
+      _isArabic ? 'الطابعة غير متصلة' : 'The printer is not connected';
+
+  String get connected => _isArabic ? 'متصلة' : 'Connected';
+
+  String get notConnected => _isArabic ? 'غير متصلة' : 'Not connected';
+
+  String get checkingConnection => _isArabic ? 'جارٍ الفحص…' : 'Checking…';
+
   String get ok => _isArabic ? 'حسناً' : 'OK';
 
   /// The single place a [DsPrintFailure] becomes user-facing copy. The
@@ -140,6 +149,7 @@ class DsPrintStrings {
       InterfaceUnavailableFailure(:final interfaceType) =>
         interfaceUnavailable(interfaceType),
       DiscoveryFailure() => discoveryFailed,
+      PrinterUnreachableFailure() => printerNotConnected,
     };
   }
 }

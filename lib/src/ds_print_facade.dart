@@ -12,6 +12,7 @@ import 'domain/entities/printer_device.dart';
 import 'domain/entities/printer_interface_type.dart';
 import 'domain/usecases/auto_print_usecase.dart';
 import 'domain/usecases/capture_invoice_usecase.dart';
+import 'domain/usecases/check_printer_connection_usecase.dart';
 import 'domain/usecases/discover_printers_usecase.dart';
 import 'domain/usecases/get_saved_printers_usecase.dart';
 import 'domain/usecases/get_selected_printer_usecase.dart';
@@ -68,9 +69,21 @@ class DsPrint {
   /// scan: pairing is manual (see [addPrinter]). Callers that print
   /// automatically (order creation) can therefore fire this unconditionally:
   /// a store without a printer simply gets nothing, silently.
+  ///
+  /// Before rendering, the selected printer gets a short connection check
+  /// (`DsPrintConfig.connectionCheckTimeout`, 3 s USB/LAN and 5 s Bluetooth by
+  /// default). A printer that does not answer returns
+  /// `Left(PrinterUnreachableFailure)` immediately — no render, no scrim —
+  /// instead of failing after the capture and a long connect timeout. If the
+  /// check itself errors, printing proceeds as normal so a faulty probe never
+  /// blocks a print.
+  ///
+  /// Pass [connectionCheck] (from [checkSelectedPrinterConnection]) to reuse a
+  /// check the host started earlier instead of starting a new one here.
   static Future<Either<DsPrintFailure, Unit>> printUrlSilently(
     String url, {
     int copies = 1,
+    Future<Either<DsPrintFailure, bool>>? connectionCheck,
   }) async {
     // Logged before anything else runs, so the incoming link is on record even
     // when the call returns early because no printer was found — otherwise a
@@ -84,7 +97,16 @@ class DsPrint {
     final deviceResult = await dsPrintResolve<ResolvePrintDeviceUseCase>()();
     return deviceResult.fold(
       (failure) async => Left(failure),
-      (_) async {
+      (device) async {
+        final connection = await (connectionCheck ??
+            dsPrintResolve<CheckPrinterConnectionUseCase>()(device));
+        final unreachable = connection.fold((failure) {
+          log('DsPrint.printUrlSilently: connection check errored, '
+              'printing anyway - ${failure.debugMessage}');
+          return false;
+        }, (reachable) => !reachable);
+        if (unreachable) return const Left(PrinterUnreachableFailure());
+
         final captureResult =
             await dsPrintResolve<CaptureInvoiceUseCase>()(url);
         return captureResult.fold(
@@ -93,6 +115,29 @@ class DsPrint {
               dsPrintResolve<AutoPrintUseCase>()(payload, copies: copies),
         );
       },
+    );
+  }
+
+  /// Opens and closes a connection to [device] with a short timeout
+  /// (`DsPrintConfig.connectionCheckTimeout`, 3 s USB/LAN and 5 s Bluetooth by
+  /// default) to see whether it is reachable. `Right(false)` means it did not answer. Serialized with
+  /// print jobs, so it waits for a running job instead of competing with it.
+  static Future<Either<DsPrintFailure, bool>> checkConnection(
+      PrinterDevice device) {
+    return dsPrintResolve<CheckPrinterConnectionUseCase>()(device);
+  }
+
+  /// Starts a connection check of the selected printer without printing.
+  /// `Left(NoPrinterSelectedFailure)` when none is selected. A host that prints
+  /// right after a network call can start this before the call and hand the
+  /// future to [printUrlSilently] (`connectionCheck:`), so the check overlaps
+  /// the request instead of running after it.
+  static Future<Either<DsPrintFailure, bool>>
+      checkSelectedPrinterConnection() async {
+    final deviceResult = await dsPrintResolve<ResolvePrintDeviceUseCase>()();
+    return deviceResult.fold(
+      (failure) async => Left(failure),
+      (device) => dsPrintResolve<CheckPrinterConnectionUseCase>()(device),
     );
   }
 

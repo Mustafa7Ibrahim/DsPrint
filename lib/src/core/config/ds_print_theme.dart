@@ -16,6 +16,8 @@ class DsPrintTheme {
   final Color border;
   final Color selectedIndicator;
   final Color unselectedIndicator;
+  final Color connectedIndicator;
+  final Color disconnectedIndicator;
   final Color appBarBackground;
   final Color appBarForeground;
   final Color progressIndicator;
@@ -32,6 +34,8 @@ class DsPrintTheme {
     required this.border,
     required this.selectedIndicator,
     required this.unselectedIndicator,
+    required this.connectedIndicator,
+    required this.disconnectedIndicator,
     required this.appBarBackground,
     required this.appBarForeground,
     required this.progressIndicator,
@@ -75,6 +79,8 @@ class DsPrintTheme {
       border: primary,
       selectedIndicator: primary,
       unselectedIndicator: theme.dividerColor,
+      connectedIndicator: Colors.green.shade600,
+      disconnectedIndicator: colorScheme.error,
       appBarBackground: primary,
       appBarForeground: onPrimary,
       progressIndicator: progress,
