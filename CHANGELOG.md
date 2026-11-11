@@ -1,5 +1,66 @@
 # Changelog
 
+## 2.0.0
+
+A silent print no longer waits out the Star SDK's connect timeout when the
+printer is simply not there. The selected printer is probed first, with a short
+timeout, and an unreachable one returns a typed failure straight away — before
+any WebView render or scrim — so the host can tell the user at once.
+
+Measured on a Star mC-Print3 over USB OTG with the printer unplugged: every
+silent print used to wait the full Star `openTimeout` (about 5 s) before
+failing; the USB case now answers instantly. LAN and Bluetooth still need a
+real connection attempt, bounded by the check timeout.
+
+- **Connection check.** New `DsPrint.checkConnection(device)` and
+  `DsPrint.checkSelectedPrinterConnection()` return
+  `Future<Either<DsPrintFailure, bool>>`; `Right(false)` means the printer did
+  not answer. Natively (new `checkConnection` method on the
+  `com.printer.html/sendToNative` channel) it opens and closes a connection with
+  a timeout. A USB printer is answered instantly from `UsbManager` when no Star
+  device (vendor id `0x0519`) is attached; a printer already held by another
+  connection counts as reachable.
+- **`printUrlSilently` checks first.** Order: resolve the selected printer,
+  check its connection, then render and print. A `Right(false)` check returns
+  `Left(PrinterUnreachableFailure)` immediately. A `Left` from the check itself
+  is logged and printing proceeds (fail-open), so a faulty probe never blocks a
+  print. New optional `connectionCheck:` takes a check the host started earlier
+  (see the README) so it can overlap the network request that produces the
+  invoice URL.
+- **Checks never compete with jobs.** They run through the same queue as print
+  jobs, so a check waits for a running job instead of being refused by a busy
+  printer.
+- **`PrinterUnreachableFailure`** with user-facing English and Arabic copy
+  ("The printer is not connected" / "الطابعة غير متصلة").
+- **Printers screen shows connection status.** Each saved printer gets a dot and
+  a label (Checking… / Connected / Not connected, English and Arabic). Printers
+  are checked one at a time when the list loads or the set of printers changes
+  (not when only the selection changes); pull to refresh re-checks.
+- **`DsPrintConfig.connectionCheckTimeout`** overrides the per-interface
+  defaults (3 s for USB and LAN, 5 s for Bluetooth).
+- **`DsPrintTheme`** gains `connectedIndicator` (default: green) and
+  `disconnectedIndicator` (default: `colorScheme.error`).
+- Documented: a Star printer with USB peripheral ports can make Android
+  recreate the host Activity when plugged in or out, which looks like an app
+  restart — add `keyboard|keyboardHidden|navigation` to `android:configChanges`
+  (README, Troubleshooting).
+
+Cost: a successful silent print now does one extra open/close of the printer
+before capturing, unless the host overlaps it with the request via
+`connectionCheck:`.
+
+Breaking:
+
+- `DsPrintFailure` has a new subtype, `PrinterUnreachableFailure`, so an
+  exhaustive `switch` over it needs a new case.
+- `printUrlSilently` returns `PrinterUnreachableFailure` for a selected but
+  unreachable printer, with no render, instead of capturing the invoice and
+  failing later with `NativePrintFailure`.
+- `DsPrintTheme` has two new **required** constructor fields,
+  `connectedIndicator` and `disconnectedIndicator`. Hosts that build one by
+  hand (for `DsPrintConfig.themeOverride`) must supply them; `DsPrintTheme.of`
+  already does.
+
 ## 1.0.0
 
 Printers are now added manually, by connection type, and one of them is the

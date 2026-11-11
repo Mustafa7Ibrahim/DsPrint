@@ -108,6 +108,11 @@ a spinner sit over the still-visible invoice.
 DsPrint.printUrlSilently(url)
   └─ ResolvePrintDeviceUseCase → the active printer the user chose
         └─ none → Left(NoPrinterSelectedFailure), and nothing else runs
+  └─ connection check → `connectionCheck` future if the host passed one,
+        otherwise CheckPrinterConnectionUseCase(device) started here
+        ├─ Right(false) → Left(PrinterUnreachableFailure), nothing renders
+        ├─ Left(_)      → logged, printing proceeds (fail-open)
+        └─ Right(true)  → continue
   └─ CaptureInvoiceUseCase → InvoiceCaptureRepository
         └─ OverlayInvoiceRenderer
               ├─ inserts an OverlayEntry: DsPrintWebSurface + DsPrintCapturingScrim
@@ -116,7 +121,7 @@ DsPrint.printUrlSilently(url)
   └─ AutoPrintUseCase → resolve (now a cached read) → native
 ```
 
-**Find the printer before doing the expensive part.** The first version ran
+**Find the printer, and check it answers, before doing the expensive part.** The first version ran
 these in the opposite order — capture, then look for a device. Rendering costs a
 WebView, a couple of seconds and a blocking scrim; discovery costs up to ten
 seconds more. So a store with invoice printing enabled but no printer attached
@@ -128,6 +133,32 @@ that fire this (order creation) can't know which do.
 private `_resolveDevice`; extracting it lets a caller ask "is there a printer?"
 without printing. `AutoPrintUseCase` still resolves for itself — a second cheap
 cached read.
+
+**The connection check.** Resolving only proves a printer was *saved*, not that
+it is there. Before the check existed, an unplugged printer cost a full capture
+and then the Star SDK's whole `openTimeout` (~5 s measured on a mC-Print3 over
+USB OTG) before failing with a generic `NativePrintFailure`. The check opens and
+closes a connection with a short timeout (`DsPrintConfig.connectionCheckTimeout`,
+else 3 s USB/LAN and 5 s Bluetooth, chosen by
+`CheckPrinterConnectionUseCase.defaultTimeoutFor`) and an unreachable printer
+now fails in front of the render, with a type the host can act on.
+
+Two rules govern what the check's answer means:
+
+* **`Right(false)` blocks; `Left` does not (fail-open).** `Right(false)` is a
+  real answer: the printer was asked and did not respond. A `Left` means the
+  *probe* broke — a platform exception, an unsupported platform, a native bug.
+  That says nothing about the printer, so it is logged and the print proceeds;
+  a faulty probe must never be what stops an invoice printing. (The Printers
+  screen is the opposite on purpose: there a `Left` is shown as "Not connected",
+  because a status row has nothing better to say.)
+* **A check is cost, so it can overlap.** It is one extra open/close before
+  every print. The facade therefore accepts a `connectionCheck:` future: a host
+  that prints right after a network call starts
+  `DsPrint.checkSelectedPrinterConnection()` *before* the call and passes the
+  future in, so the check runs during the request and is usually already
+  complete when the order succeeds. `printUrlSilently` then simply awaits it.
+  The future is a snapshot — it must not be reused for a later retry.
 
 Resolution never scans. Pairing is manual: printers are added through the Add
 Printer sheet (`AddPrinterCubit` → `DiscoverPrintersUseCase(interfaceType:)` →
@@ -187,6 +218,29 @@ unmounts on the *next* frame, so the `RawImage` may still be painting it.
 > `opaque: true` route entry, so the WebView would never paint at all. And
 > clipping — see above; it costs you a blank print, which is worse than a
 > cosmetic problem because nothing reports it.
+
+### The Printers screen's connection status
+
+`PrinterPickerScreen` shows a dot and label per saved printer (Checking… /
+Connected / Not connected). The state is owned by an internal
+`PrinterConnectionCubit` (a `registerFactory`, not exported) whose state is
+`Map<PrinterDevice, PrinterConnectionStatus>`; the tile takes a nullable
+`connectionStatus` and draws nothing for `null`.
+
+* **One printer at a time.** `checkAll(printers)` marks every printer
+  *checking*, then awaits `CheckPrinterConnectionUseCase` for each in turn and
+  emits as each finishes. Printers may share a radio and the repository queue
+  serializes them anyway, so parallel probes would only wait in line.
+* **A generation counter cancels stale runs.** Each `checkAll` bumps
+  `_generation`; a pass that wakes up to find a newer generation (or a closed
+  cubit) stops emitting. Without it, pull-to-refresh during a slow pass would
+  let the old pass overwrite fresh results.
+* **When it runs.** A `BlocListener<SavedPrintersCubit>` with `listenWhen`
+  fires on load and when the *list* changed (`listEquals`), not when only the
+  selection changed — tapping another printer must not re-probe everything.
+  `RefreshIndicator` around the list calls `checkAll` again.
+* Rows are per-row `BlocSelector`s, so one printer's result rebuilds only its
+  tile.
 
 ---
 
@@ -268,12 +322,60 @@ trim algorithm has unit tests at all — none of it needs a `WebViewPlatform`.
 | Channel | Type | Direction |
 | --- | --- | --- |
 | `com.printer.discover/event` | Event | native → Dart, discovered devices |
-| `com.printer.html/sendToNative` | Method | Dart → native, payload chunks |
+| `com.printer.html/sendToNative` | Method | Dart → native: `fromFlutter` (payload chunks), `checkConnection` |
 | `com.printer.html/listenFromNative` | Event | native → Dart, `success`/`failed` |
 
 Channel names are duplicated between `ds_print_injection.dart` and
 `DsPrintPlugin.kt`. A mismatch is a silent runtime no-op, not a build error —
 keep them in sync.
+
+### The `checkConnection` method
+
+Second method on the print `MethodChannel`, next to `fromFlutter`. Anything else
+gets `notImplemented`.
+
+| | |
+| --- | --- |
+| Arguments | a map: `printerId` (String), `printerType` (`"Usb"` \| `"Lan"` \| `"Bluetooth"`, i.e. `PrinterInterfaceType.nativeName`), `timeoutMs` (Int, > 0) |
+| Reply | a `Boolean`: `true` reachable, `false` not |
+| Bad arguments | `result.error("bad-args", ...)` when the map is missing, `printerId` is blank, `printerType` is missing, or `timeoutMs` is missing or not positive |
+
+**Threading and error handling** (`DsPrintPlugin.checkConnection`). The Star
+SDK call is `suspend`, so it runs in a coroutine on `Dispatchers.Default` — never
+on the main thread, so a slow open cannot jank the UI. The reply is posted back
+to the main thread (`mainHandler.post`) because `MethodChannel.Result` must be
+answered there, and it is answered **exactly once**: the `try` around the
+gateway call catches `Throwable` and turns it into `false`, so no path leaves
+Dart hanging and none can crash the process.
+
+**What "reachable" means** (`StarPrinterGateway.isReachable`):
+
+1. *USB fast path.* If `printerType` is `"Usb"` and `UsbManager.deviceList` has
+   no device with vendor id `0x0519` (Star Micronics), return `false` at once —
+   no SDK call, no waiting. This is the measured win: an unplugged USB printer
+   used to cost the full `openTimeout`. If there is no `UsbManager` the fast path
+   is skipped and the SDK decides.
+2. Otherwise build a `StarPrinter` with `openTimeout = timeoutMs` and
+   `openAsync()`. Success → `true`.
+3. `StarIO10InUseException` → `true`. The printer is plainly there; another
+   connection (a print job, another app) holds it. Reporting that as
+   unreachable would block prints for a perfectly healthy printer.
+4. Any other exception (timeout, unplugged, radio off) → `false`.
+5. `closeAsync()` always runs in a `finally`, so the probe never leaves a
+   connection open.
+
+**Dart side.** `PrinterNativeDataSource.checkConnection(device, timeout)` sends
+the call and adds its own guard of `timeout + 3 s` that resolves to `false` — it
+only fires if native never answers, since native honours `timeoutMs` itself.
+`PlatformException` → `NativePrintException`; `MissingPluginException` (off
+Android) → `UnsupportedPlatformException`. `PrinterRepositoryImpl` maps those to
+`NativePrintFailure` / `UnsupportedPlatformFailure`.
+
+**Why it goes through `PrintJobQueue`.** `PrinterRepository.checkConnection`
+calls `_queue.enqueue(...)`, the same queue as print jobs. The Star SDK allows
+one connection to a printer at a time, so a check issued while a job holds it
+would find it "in use" or contend with the job's own connection. Queued, it waits for the job and then asks an idle printer. (This matters
+for the Printers screen too, which can be opened while a print is in flight.)
 
 ### The discovery protocol
 
@@ -329,7 +431,9 @@ finished. Success is now reported after the SDK's print call returns.
 
 ### Kotlin structure
 
-`DsPrintPlugin` registers channels and delegates — nothing else. Dispatch is a
+`DsPrintPlugin` registers channels and delegates; the one piece of logic it owns
+is `checkConnection`'s argument validation and main-thread reply (above) — the
+connection itself is `StarPrinterGateway.isReachable`. Dispatch is a
 strategy per payload type (`HtmlPrintStrategy`, `ImagePrintStrategy`), and
 `StarPrinterGateway` is the only file that imports the Star SDK. Swapping to a
 different printer vendor means writing one new gateway.
@@ -350,7 +454,7 @@ addresses — not the principle in the abstract.
 | **S**RP | `InvoiceCaptureRunner`, `PayloadChunker`, `ChunkStatusResolver`, `CaptureHeightResolver`, `PrintJobQueue` | A 261-line `PrinterCubit` mixing discovery, caching, chunking, dispatch and UI state |
 | **O**CP | `sealed class PrintPayload` + exhaustive `switch` | `if (type == "html") ... else ...` silently fell through to HTML for unknown types; a new payload type is now a compile error until handled |
 | **L**SP | `DsWebController`, `DsImageBoundary`, `InvoiceRenderPort` | Fakes substitute for platform types in tests; `SurfaceInvoiceRenderer` and `OverlayInvoiceRenderer` are interchangeable at the call site |
-| **I**SP | Four repositories (capture, discovery, print, selection) | One god-interface would force every consumer to depend on all of it |
+| **I**SP | Five repositories (capture, discovery, print, saved printers, selected printer) | One god-interface would force every consumer to depend on all of it |
 | **D**IP | Platform types (`MethodChannel`, `WebViewController`, `SharedPreferences`) confined to `data/datasources` | `domain` and use cases are pure Dart, unit-testable without a binding |
 
 ### Static state removed
@@ -388,6 +492,12 @@ Every entry point resolves through `dsPrintResolve`. **This includes the
 screens** — a host router builds `InvoicePreviewScreen` directly without ever
 calling a `DsPrint.*` method, and resolving straight from `dsPrintSl` in that
 case threw *"InvoicePreviewCubit is not registered inside GetIt"* on device.
+
+Registrations added for the connection check: `CheckPrinterConnectionUseCase`
+(`registerLazySingleton`, over `PrinterRepository`) and `PrinterConnectionCubit`
+(`registerFactory`, one per Printers screen, with the use case). The facade
+resolves the use case directly; the screen resolves the cubit through
+`dsPrintResolve`.
 
 The registration guard is container state, not a bool:
 
@@ -497,6 +607,33 @@ a shell-nested path from a route outside the shell crashes with
 `Failed assertion: '!keyReservation.contains(key)'` (duplicate `Page` key). An
 imperative root push sidesteps the whole problem.
 
+**USB peripherals recreate the host Activity.** Star models with USB peripheral
+ports (mC-Print3 and others) pass attached HID devices — scanners, keyboards,
+wireless mouse/keyboard dongles — through to Android while the printer is
+plugged in. Plugging or unplugging the printer then changes the Activity
+configuration (`keyboard`, `keyboardHidden`, and `navigation` on devices with a
+D-pad). A host `MainActivity` that does not list those in
+`android:configChanges` is recreated and the Flutter app appears to restart.
+The package cannot fix this from its own manifest (the attribute belongs to the
+host's activity), so it is documented in the README. Diagnose with
+`adb logcat`: `WindowManager: Checking to restart ... not-handles={CONFIG_NAVIGATION}`.
+
+**The first USB open raises Android's permission dialog.** A connection check
+that runs while the dialog is on screen cannot open the device, times out, and
+reports `Right(false)` ("not connected") although the printer is fine. The
+`UsbManager` fast path does not help here — the device *is* attached. It is a
+transient, user-resolvable state, so the check does not try to work around it.
+
+**"In use" is reachable.** `StarIO10InUseException` means another connection
+holds the printer, i.e. it is present. `isReachable` returns `true` for it; the
+Dart-side queue exists to keep our own jobs from causing it.
+
+**Two timeouts on a check, on purpose.** Native bounds the open with
+`openTimeout = timeoutMs`; Dart adds `timeout + 3 s` and resolves to `false`.
+The second is a backstop for a native side that never replies (a coroutine that
+hangs past the SDK's own timeout), so the call — and the print queue behind
+it — cannot be wedged forever.
+
 **A spinner defeats `pumpAndSettle`.** `CircularProgressIndicator` schedules
 frames forever, so any widget test that ends on a loading state times out rather
 than settling. Use `pump(Duration)` in a loop for those.
@@ -510,6 +647,11 @@ than settling. Use `pump(Duration)` in a loop for those.
 | `pubspec.yaml` | `ds_print:` as a git dependency on this repo |
 | Route registration | Four routes: `tax-invoice`, `printer/add`, `printer/html`, `printer/base64` |
 | Post-order-creation hook | `DsPrint.printUrlSilently` after an order is created |
+| Overlap the check with the request | `final check = DsPrint.checkSelectedPrinterConnection();` before the order request, then `printUrlSilently(url, connectionCheck: check)` — hides the check behind the network call |
+| Offline handling | Handle `PrinterUnreachableFailure` from `printUrlSilently` (prompt the user; retry without the old future) |
+| Printer status UI of your own | `DsPrint.checkConnection(printer)` / `checkSelectedPrinterConnection()` |
+| `MainActivity` manifest entry | `keyboard\|keyboardHidden\|navigation` in `android:configChanges` when Star printers are used over USB |
+| `DsPrintTheme` by hand | Only if you set `themeOverride`: supply `connectedIndicator` and `disconnectedIndicator` |
 | A manual smoke-test screen | Exercises the API end-to-end during development |
 
 A host's `MainActivity.kt` typically shrinks dramatically once adopted — in the

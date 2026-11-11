@@ -18,14 +18,22 @@ version bump plus a git tag, and a host picks it up by changing its `ref`.
 ## Versioning
 
 `version:` in `pubspec.yaml` is the source of truth. The tag is the same number
-with a `v` prefix: `0.2.0` → `v0.2.0`.
+with a `v` prefix: `2.0.0` → `v2.0.0`.
 
-While the package is pre-1.0:
+From 1.0.0 on the package follows semantic versioning:
 
 | Change | Bump | Example |
 |---|---|---|
-| Breaks a host: removed or renamed API, a new case on a sealed type (e.g. `Failure`), a changed default behaviour | minor | `0.2.0` → `0.3.0` |
-| Bug fixes and additive API | patch | `0.2.0` → `0.2.1` |
+| Breaks a host: removed or renamed API, a new case on a sealed type (e.g. `DsPrintFailure`), a changed default behaviour, a new required constructor parameter (e.g. on `DsPrintTheme`) | **major** | `1.0.0` → `2.0.0` |
+| Additive: new API, new optional parameter, new opt-in config | minor | `2.0.0` → `2.1.0` |
+| Bug fixes with no API or behaviour change | patch | `2.0.0` → `2.0.1` |
+
+Anything not exported from `lib/ds_print.dart` (repositories, use cases,
+datasources, the native channel protocol) is internal and can change in any
+release.
+
+History: before 1.0.0 the same breaking changes bumped the **minor** number
+(`0.2.0` → `0.3.0`) and additive changes and fixes bumped the patch.
 
 ## While working
 
@@ -36,7 +44,7 @@ as changes land on `main`. Leave `version:` alone until the release.
 
 On `main`, with a clean tree:
 
-1. `flutter test` — all passing.
+1. `flutter analyze` and `flutter test` — clean and all passing.
 2. Bump `version:` in `pubspec.yaml`.
 3. Rename `## Unreleased` to `## X.Y.Z` in `CHANGELOG.md`.
 4. Update `ref:` in the README's [Install](../README.md#install) snippet.
@@ -70,7 +78,7 @@ git ls-remote --tags origin
 ## Updating a host
 
 Read the CHANGELOG entries between the host's current version and the new one
-first — a minor bump can need host changes. Then in the host's `pubspec.yaml`:
+first — a major bump (and, before 1.0, a minor one) can need host changes. Then in the host's `pubspec.yaml`:
 
 ```yaml
 dependencies:

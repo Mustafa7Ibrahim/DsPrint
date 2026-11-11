@@ -21,7 +21,7 @@ dependencies:
   ds_print:
     git:
       url: https://github.com/Mustafa7Ibrahim/DsPrint.git
-      ref: v0.2.0
+      ref: v2.0.0
 ```
 
 Each release is a git tag. To move to a newer one, change `ref` and run
@@ -61,14 +61,16 @@ No `BuildContext` needed — the package finds the root navigator itself.
 | Call | What it does | Returns |
 | --- | --- | --- |
 | `DsPrint.url(url, {context, title})` | Pushes the invoice preview screen with a Print action | `Future<void>` |
-| `DsPrint.printUrlSilently(url, {copies})` | Renders `url` off-screen and prints it with no UI | `Either<DsPrintFailure, Unit>` |
-| `DsPrint.printBase64(base64, {copies})` | Prints an already-captured PNG | `Either<DsPrintFailure, Unit>` |
-| `DsPrint.printHtml(html)` | Prints raw HTML (rendered natively) | `Either<DsPrintFailure, Unit>` |
+| `DsPrint.printUrlSilently(url, {copies, connectionCheck})` | Checks the active printer is reachable, then renders `url` off-screen and prints it with no UI | `Future<Either<DsPrintFailure, Unit>>` |
+| `DsPrint.checkSelectedPrinterConnection()` | Tests whether the active printer answers, without printing | `Future<Either<DsPrintFailure, bool>>` |
+| `DsPrint.checkConnection(device)` | Tests whether a given printer answers | `Future<Either<DsPrintFailure, bool>>` |
+| `DsPrint.printBase64(base64, {copies})` | Prints an already-captured PNG | `Future<Either<DsPrintFailure, Unit>>` |
+| `DsPrint.printHtml(html)` | Prints raw HTML (rendered natively) | `Future<Either<DsPrintFailure, Unit>>` |
 | `DsPrint.selectDevice({context})` | Opens the printers screen: add printers, choose the active one | `Future<void>` |
 | `DsPrint.addPrinter({context})` | Opens the Add Printer sheet on its own | `Future<PrinterDevice?>` |
-| `DsPrint.savedPrinters()` | Every printer the user has added | `Either<DsPrintFailure, List<PrinterDevice>>` |
-| `DsPrint.selectedPrinter()` | The active printer every print goes to | `Either<DsPrintFailure, PrinterDevice?>` |
-| `DsPrint.discover({interfaceType})` | Scans without saving; `null` scans USB + LAN | `Either<DsPrintFailure, List<PrinterDevice>>` |
+| `DsPrint.savedPrinters()` | Every printer the user has added | `Future<Either<DsPrintFailure, List<PrinterDevice>>>` |
+| `DsPrint.selectedPrinter()` | The active printer every print goes to | `Future<Either<DsPrintFailure, PrinterDevice?>>` |
+| `DsPrint.discover({interfaceType})` | Scans without saving; `null` scans USB + LAN | `Future<Either<DsPrintFailure, List<PrinterDevice>>>` |
 | `DsPrint.configure(config)` | Optional overrides — see [Customising](#customising) | `void` |
 
 ### Printers — added manually, one active
@@ -86,6 +88,15 @@ printers on the printers screen (`DsPrint.selectDevice()` or
 The screen lists every saved printer with its connection type and marks the
 active one. Tapping another printer makes it active; swiping one away (with a
 confirmation) removes it — removing the active printer leaves none active.
+
+Under each printer a coloured dot and a label show whether it is reachable:
+**Checking…**, **Connected** or **Not connected** (English and Arabic). The
+printers are checked one at a time when the screen opens and whenever the set
+of printers changes (adding or removing one — not merely choosing another
+active printer). Pull down on the list to check them again. A printer that
+errors during the check is shown as **Not connected**. The dot colours come
+from `DsPrintTheme.connectedIndicator` / `disconnectedIndicator`
+(see [Customising](#customising)).
 
 **The active printer is used automatically by every print call** —
 `printUrlSilently`, `printBase64`, `printHtml`, and the preview screen's Print
@@ -171,10 +182,23 @@ It prints to the **active** printer (see [Printers](#printers--added-manually-on
 It never scans: with no active printer it returns `NoPrinterSelectedFailure`.
 The choice survives app restarts, and a failed print does not drop it.
 
-**Safe to call unconditionally.** It checks for the printer *before* it renders
-anything, so a store with no printer gets `NoPrinterSelectedFailure` with no
-overlay, no indicator and no invoice render — nothing the user can see. Fire it
-after every order; the stores that have a printer print, the rest no-op.
+In order, it:
+
+1. Finds the active printer. None → `Left(NoPrinterSelectedFailure)`, and
+   nothing else runs.
+2. **Checks the printer is reachable** (see
+   [Connection check](#connection-check)). The printer did not answer →
+   `Left(PrinterUnreachableFailure)` immediately: no render, no scrim, nothing
+   on screen. The check itself erroring is logged and ignored — printing
+   proceeds, so a faulty probe never blocks a print.
+3. Renders the invoice off-screen and captures it.
+4. Sends it to the printer.
+
+**Safe to call unconditionally.** Steps 1 and 2 happen *before* anything is
+rendered, so a store with no printer — or a printer that is switched off —
+gets a failure with no overlay, no indicator and no invoice render, nothing
+the user can see. Fire it after every order; the stores whose printer is
+there print, the rest get a failure you can ignore or act on.
 
 "No UI" means no *navigation*: for the 1–3 seconds the render takes, the screen
 keeps showing what it was showing, dimmed by a scrim with a loading indicator.
@@ -182,6 +206,71 @@ It is a still frame rather than the live screen — the invoice has to render in
 real, on-screen WebView to be capturable, so that WebView is covered with a
 photograph of the screen taken the moment before. Taps are blocked for the
 duration, since the frame underneath cannot react to them.
+
+#### Overlapping the check with your own request
+
+The check is one extra open/close of the printer before every print. Unless you
+overlap it, a *successful* print pays for it. The usual flow — create an order,
+get an invoice URL back, print it — lets you hide it behind the network call:
+start the check **before** the request and hand the future to
+`printUrlSilently`.
+
+```dart
+// 1. Start the check now. Do not await it yet.
+final connectionCheck = DsPrint.checkSelectedPrinterConnection();
+
+// 2. Do the request that produces the invoice URL.
+final order = await orderRepository.create(cart);
+
+// 3. By now the answer is usually ready, so printing starts at once.
+final result = await DsPrint.printUrlSilently(
+  order.invoiceUrl,
+  connectionCheck: connectionCheck,
+);
+```
+
+`printUrlSilently` awaits the future you pass instead of starting its own, and
+applies the same rules as above (`Right(false)` → `PrinterUnreachableFailure`;
+`Left` → logged, print anyway). Do **not** keep a future around and reuse it
+for a later retry — it describes the printer at the moment it ran. Start a
+fresh check each time.
+
+### Connection check
+
+Both methods open a connection to the printer with a short timeout and close it
+again. Neither prints anything.
+
+```dart
+// The active printer.
+final selected = await DsPrint.checkSelectedPrinterConnection();
+
+// Any printer, e.g. one from DsPrint.savedPrinters().
+final one = await DsPrint.checkConnection(printer);
+
+selected.fold(
+  (failure) => debugPrint(failure.debugMessage),   // could not run the check
+  (reachable) => debugPrint(reachable ? 'ready' : 'not answering'),
+);
+```
+
+Result, as `Either<DsPrintFailure, bool>`:
+
+| Result | Meaning |
+| --- | --- |
+| `Right(true)` | The printer answered (or is already held by another connection — it is there) |
+| `Right(false)` | The printer did not answer within the timeout: off, unplugged, out of range |
+| `Left(NoPrinterSelectedFailure)` | `checkSelectedPrinterConnection` with no active printer, or a `checkConnection` device with no id |
+| `Left(UnsupportedPlatformFailure)` | Off Android |
+| `Left(NativePrintFailure)` | The native side could not run the check |
+
+How long it waits: `DsPrintConfig.connectionCheckTimeout` if set, otherwise 3 s
+for USB and LAN and 5 s for Bluetooth. A USB printer is the fast case — when no
+Star USB device is attached at all, the answer is `Right(false)` instantly, with
+no connection attempt. LAN and Bluetooth need a real attempt, so an absent
+printer costs the full timeout.
+
+A check is queued behind any print job that is running, so it never competes
+with one for the printer; it just waits its turn.
 
 ### Screens as routes
 
@@ -213,7 +302,7 @@ prints it — to the printer tapped, or to one added right there — and pops.
 ## Handling failures
 
 Every printing call returns `Either<DsPrintFailure, Unit>` (from `dartz`) rather
-than throwing. `DsPrintFailure` is a sealed class, so a `switch` over it is
+than throwing; the connection checks return `Either<DsPrintFailure, bool>`. `DsPrintFailure` is a sealed class, so a `switch` over it is
 checked at compile time:
 
 | Failure | Meaning |
@@ -229,6 +318,49 @@ checked at compile time:
 | `NativePrintFailure(details)` | The printer or SDK reported an error, or timed out |
 | `StorageFailure(details)` | Reading/writing the paired device failed |
 | `NotConfiguredFailure(reason)` | No navigator/context could be resolved |
+| `PrinterUnreachableFailure` | The active printer did not answer the connection check — off, unplugged or out of range. Returned by `printUrlSilently` only; the check methods report it as `Right(false)` |
+
+A `switch` over `DsPrintFailure` must handle every case — when upgrading to 2.0,
+add one for `PrinterUnreachableFailure`.
+
+### Telling the user the printer is not connected
+
+`PrinterUnreachableFailure` is the failure worth acting on rather than
+logging. `printUrlSilently` returns it instantly, before anything renders, so
+you can ask the user what to do right away. (If every store is expected to have
+a printer, treat `NoPrinterSelectedFailure` the same way.)
+
+```dart
+final result = await DsPrint.printUrlSilently(
+  order.invoiceUrl,
+  connectionCheck: connectionCheck,
+);
+
+result.fold(
+  (failure) {
+    switch (failure) {
+      case PrinterUnreachableFailure():
+        showPrinterOfflineDialog(
+          message: 'The printer is not connected', // your own localised text
+          onRetry: () => DsPrint.printUrlSilently(order.invoiceUrl),
+          onChoosePrinter: () => DsPrint.selectDevice(),
+        );
+      case NoPrinterSelectedFailure():
+        break; // store without a printer: nothing to do
+      default:
+        debugPrint(failure.debugMessage);
+    }
+  },
+  (_) => debugPrint('printed'),
+);
+```
+
+`showPrinterOfflineDialog` and its text are yours: the package's own localised
+copy ("The printer is not connected" / "الطابعة غير متصلة") is shown only by its
+own screens and is not exported. Retrying calls `printUrlSilently`
+*without* the old `connectionCheck` future, so it starts a fresh check.
+`DsPrint.selectDevice()` opens the printers screen, where the user can see
+which printers are connected and pick another one.
 
 `debugMessage` is English and meant for logs. User-facing copy lives inside the
 package and is already localised (see below) — the host does not need to
@@ -268,6 +400,7 @@ Optional. Call once before first use, typically in `main()`:
 DsPrint.configure(DsPrintConfig(
   navigatorKey: myNavigatorKey,          // if tree-walking finds the wrong one
   printResultTimeout: Duration(seconds: 30), // default 20s
+  connectionCheckTimeout: Duration(seconds: 4), // default 3s USB/LAN, 5s Bluetooth
   themeOverride: DsPrintTheme(...),      // bypasses ambient theme entirely
   showBluetooth: false,                  // hide Bluetooth in Add Printer
   showLan: false,                        // hide LAN in Add Printer
@@ -277,6 +410,25 @@ DsPrint.configure(DsPrintConfig(
 `themeOverride` takes a fully-built `DsPrintTheme`; when set, the ambient
 `ThemeData` is ignored completely. Use it when the host's `primaryColor` is not
 the colour you want the print screens to use.
+
+`DsPrintTheme` has two fields for the printers screen's connection status, both
+**required** when you construct one yourself:
+
+| Field | Used for | Default in `DsPrintTheme.of` |
+| --- | --- | --- |
+| `connectedIndicator` | The dot beside "Connected" | `Colors.green.shade600` |
+| `disconnectedIndicator` | The dot beside "Not connected" | `colorScheme.error` |
+
+(The "Checking…" dot uses `unselectedIndicator`.) Hosts that only rely on the
+ambient theme need to do nothing; a host that builds `DsPrintTheme(...)` by hand
+for `themeOverride` must add both when upgrading to 2.0.
+
+`connectionCheckTimeout` is how long a [connection check](#connection-check)
+waits for the printer — for `printUrlSilently`, the two `checkConnection`
+methods and the printers screen alike. Leave it `null` for 3 s (USB, LAN) and
+5 s (Bluetooth). Raise it if a slow network or Bluetooth link reports a printer
+as not connected when it is fine; keep it short, because it is also how long an
+absent LAN or Bluetooth printer delays a print.
 
 ---
 
@@ -291,10 +443,15 @@ Printing is Android-only: the Star Micronics `stario10` SDK is bundled in the
 package's Android library, and there is no iOS counterpart. The preview screen
 and capture pipeline are pure Flutter and run anywhere.
 
-Nothing needs adding to the host's `AndroidManifest.xml` or `build.gradle` —
-the plugin's own manifest and Gradle file are merged in automatically. The one
-exception is `ACCESS_LOCAL_NETWORK` for apps targeting SDK 37 — see
-[Bluetooth and LAN on Android](#bluetooth-and-lan-on-android).
+Nothing needs adding to the host's `build.gradle` — the plugin's own manifest
+and Gradle file are merged in automatically. Two things can need a line in the
+host's `AndroidManifest.xml`, both optional:
+
+- `ACCESS_LOCAL_NETWORK` for apps targeting SDK 37 — see
+  [Bluetooth and LAN on Android](#bluetooth-and-lan-on-android).
+- `keyboard|keyboardHidden|navigation` in `android:configChanges` of the
+  host's `MainActivity`, if you use a Star printer over USB — see
+  [Troubleshooting](#troubleshooting).
 
 ---
 
@@ -303,6 +460,37 @@ exception is `ACCESS_LOCAL_NETWORK` for apps targeting SDK 37 — see
 **"No printer connected" when a printer is plugged in.** USB discovery needs the
 Android USB permission dialog to have been accepted for that device. Unplug,
 replug, accept.
+
+**The app restarts when a Star printer is plugged in or unplugged over USB.**
+Star models with USB peripheral ports (the mC-Print3, for one) expose whatever is
+attached to them — barcode scanners, keyboards, a wireless keyboard/mouse
+dongle — to Android as HID devices while the printer is plugged in. Plugging or
+unplugging the printer therefore changes the Activity's configuration
+(`keyboard`, `keyboardHidden` and, on devices with a D-pad, `navigation`). If
+your `MainActivity` does not declare those in `android:configChanges`, Android
+destroys and recreates it, and the Flutter app looks as if it restarted. Add
+them in the **host** manifest:
+
+```xml
+<activity
+    android:name=".MainActivity"
+    android:configChanges="orientation|screenSize|keyboard|keyboardHidden|navigation|..." />
+```
+
+(keep whatever your activity already lists, and make sure all three are
+present). To confirm this is the cause, run `adb logcat` while plugging the
+printer and look for
+`WindowManager: Checking to restart ... not-handles={CONFIG_NAVIGATION}` (the
+`not-handles` set names the missing flags).
+
+**A printer shows "Not connected" (or `PrinterUnreachableFailure`) although it is
+fine.** The check is deliberately short (3 s USB/LAN, 5 s Bluetooth), so a slow
+link can miss it — raise `DsPrintConfig.connectionCheckTimeout`. For USB, the
+first open of a printer triggers Android's USB-permission dialog; a check that
+runs while the dialog is still open times out and reports "not connected". Accept
+the dialog (a print or a pull-to-refresh on the printers screen then succeeds). A
+printer that is *busy* with another connection counts as connected, not as
+failed.
 
 **Printing works once, then stops.** Usually the saved device id went stale
 (different USB port or a reset printer). Remove the printer on the printers
@@ -334,9 +522,10 @@ the widget, keep that behaviour.
 flutter test
 ```
 
-216 tests, all passing. They cover the use cases, the capture pipeline
-services, the payload chunker, the print job queue, the cubits and both
-screens' DI wiring.
+216 tests cover the use cases, the capture pipeline services, the payload
+chunker, the print job queue, the cubits and both screens' DI wiring. The
+connection check (2.0.0) has no dedicated tests yet; the existing suites fake it
+so they stay hermetic.
 
 Bluetooth and LAN discovery are tested from the platform channel inward: the
 real discovery datasource runs against a mocked native side of
